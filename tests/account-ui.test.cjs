@@ -1562,6 +1562,31 @@ test('profile menu restarts in place and opens About as a modal without opening 
   assert.equal(menu.open, false);
 });
 
+test('About closes on its backdrop but stays open for content and dialog-surface clicks', () => {
+  const dialog = {
+    open: true,
+    close() { this.open = false; },
+    getBoundingClientRect: () => ({ left: 100, top: 100, right: 500, bottom: 500 })
+  };
+  const context = vm.createContext({});
+  vm.runInContext(definition('isDialogBackdropPointer'), context);
+  vm.runInContext(definition('handleAboutDialogBackdropPointer'), context);
+  const pointer = (target, clientX, clientY) => {
+    context.event = { currentTarget: dialog, target, clientX, clientY };
+    vm.runInContext('handleAboutDialogBackdropPointer(event)', context);
+  };
+  pointer({}, 50, 50);
+  assert.equal(dialog.open, true, 'a child element does not dismiss About');
+  pointer(dialog, 250, 250);
+  assert.equal(dialog.open, true, 'the dialog surface does not dismiss About');
+  pointer(dialog, 50, 250);
+  assert.equal(dialog.open, false, 'a backdrop pointer dismisses About');
+  dialog.open = false;
+  pointer(dialog, 50, 250);
+  assert.equal(dialog.open, false, 'a closed dialog remains closed');
+  assert.match(source, /querySelector\('#aboutDialog'\)\.addEventListener\('pointerdown',handleAboutDialogBackdropPointer\)/);
+});
+
 test('mobile Settings avatar follows the account image and disconnected placeholder', () => {
   const h = harness();
   const source = h.node('#profileAvatar');

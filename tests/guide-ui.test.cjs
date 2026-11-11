@@ -27,8 +27,9 @@ test('About displays the package version and the requested creator credit', () =
   assert.match(page, /id="rcrdVersion"/);
   assert.match(page, /Created in 2026 by Kevin M\. Byrd with ChatGPT\./);
   assert.match(settings, /A home to listen, discover, and collect what matters\./);
-  assert.match(settings, /<a href="https:\/\/github\.com\/x-drybk\/rcrd-discogs-bridge\/issues\/new\/choose" target="_blank" rel="noopener noreferrer">Send feedback on GitHub ↗<\/a>/);
+  assert.match(settings, /<p class="about-feedback"><a href="https:\/\/github\.com\/x-drybk\/rcrd\/issues\/new\/choose" target="_blank" rel="noopener noreferrer">Send feedback on GitHub ↗<\/a>/);
   assert.match(settings, /Reports are public; never include credentials, account data, or listening-history files\./);
+  assert.match(css, /\.provider-credits a,\.about-feedback a,\.about-feedback a:visited\{color:var\(--lime\)\}/);
   assert.match(settings, /<p class="about-disclaimer">RCRD is a personal, non-commercial project and is not intended for sale or profit\. It uses provider APIs with your authorization where required\./);
   assert.match(settings, /not affiliated with, sponsored or endorsed by Spotify, Genius, MusicBrainz or ListenBrainz/);
   assert.match(settings, /This application uses Discogs’ API but is not affiliated with, sponsored or endorsed by Discogs\. ‘Discogs’ is a trademark of Zink Media, LLC\./);
@@ -49,7 +50,7 @@ test('public feedback uses structured GitHub forms with privacy safeguards', () 
   assert.match(bugForm, /id: version[\s\S]*id: problem[\s\S]*id: steps[\s\S]*id: area/);
   assert.match(ideaForm, /id: problem[\s\S]*id: proposal[\s\S]*id: alternatives/);
   assert.match(issueConfig, /^blank_issues_enabled: false/m);
-  assert.match(issueConfig, /url: https:\/\/github\.com\/x-drybk\/rcrd-discogs-bridge#readme/);
+  assert.match(issueConfig, /url: https:\/\/github\.com\/x-drybk\/rcrd#readme/);
 });
 
 test('current version is sourced from package metadata and used by the default Discogs agent', () => {

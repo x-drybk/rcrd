@@ -498,7 +498,8 @@ main{width:100%;margin-left:0}
 .spotify-track-source:hover,.spotify-track-source:focus-visible{color:var(--lime)}
 .discogs-data-credit{display:block;width:fit-content;margin:7px 0 0 auto;color:var(--muted);font:9px/1.35 'DM Sans',sans-serif;text-align:right;text-decoration:none;opacity:.8}
 .discogs-data-credit:hover,.discogs-data-credit:focus-visible{text-decoration:underline;opacity:1}
-.discogs-data-credit:hover,.discogs-data-credit:focus-visible,.provider-credits a{color:var(--lime)}
+.discogs-data-credit:hover,.discogs-data-credit:focus-visible,.provider-credits a,.about-feedback a,.about-feedback a:visited{color:var(--lime)}
+.about-feedback a:focus-visible{outline:2px solid var(--lime);outline-offset:2px}
 .provider-legal{font-style:italic}
 /* Keep optional configuration together without repeating the detailed setup guide. */
 .account-settings{grid-column:1/-1}

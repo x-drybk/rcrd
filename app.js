@@ -272,6 +272,14 @@ function handleProfileMenuClick(event){
 }
 document.addEventListener('click',handleProfileMenuClick);
 document.querySelector('#aboutDialogClose').addEventListener('click',()=>document.querySelector('#aboutDialog').close());
+function isDialogBackdropPointer(event){
+  const dialog=event.currentTarget;
+  if(!dialog.open||event.target!==dialog)return false;
+  const bounds=dialog.getBoundingClientRect();
+  return event.clientX<bounds.left||event.clientX>=bounds.right||event.clientY<bounds.top||event.clientY>=bounds.bottom;
+}
+function handleAboutDialogBackdropPointer(event){if(isDialogBackdropPointer(event))event.currentTarget.close()}
+document.querySelector('#aboutDialog').addEventListener('pointerdown',handleAboutDialogBackdropPointer);
 function handleProfileMenuKeydown(event){
   if(event.key!=='Escape')return;
   const open=profileMenus.find(menu=>menu.open);
@@ -943,10 +951,7 @@ function setSong(title,artist,image='',album=null){
 let lyricsRequestRevision=0;let lyricsController=null;
 function closeLyricsDialog(){++lyricsRequestRevision;if(lyricsController){lyricsController.abort();lyricsController=null}const dialog=document.querySelector('#lyricsDialog');if(dialog?.open)dialog.close();document.querySelector('#lyricsEmbed')?.replaceChildren()}
 function handleLyricsDialogBackdropPointer(event){
-  const dialog=event.currentTarget;
-  if(!dialog.open||event.target!==dialog)return;
-  const bounds=dialog.getBoundingClientRect();
-  if(event.clientX<bounds.left||event.clientX>=bounds.right||event.clientY<bounds.top||event.clientY>=bounds.bottom)closeLyricsDialog();
+  if(isDialogBackdropPointer(event))closeLyricsDialog();
 }
 async function openLyricsDialog(){
   if(!spotifyConnected||!spotifyTrackUri)return;

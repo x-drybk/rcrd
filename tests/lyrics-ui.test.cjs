@@ -34,7 +34,7 @@ function fixture(fetcher) {
     fetch: fetcher, AbortController, encodeURIComponent, URL
   });
   vm.runInContext("let spotifyConnected=true,spotifyTrackUri='spotify:track:synthetic',spotifyAccountGeneration=0,lyricsRequestRevision=0,lyricsController=null;", context);
-  for (const name of ['closeLyricsDialog', 'handleLyricsDialogBackdropPointer', 'openLyricsDialog', 'handleGeniusEmbedMessage']) vm.runInContext(definition(name), context);
+  for (const name of ['isDialogBackdropPointer', 'closeLyricsDialog', 'handleLyricsDialogBackdropPointer', 'openLyricsDialog', 'handleGeniusEmbedMessage']) vm.runInContext(definition(name), context);
   return { node, run: code => vm.runInContext(code, context) };
 }
 

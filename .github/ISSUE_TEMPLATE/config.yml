@@ -1,5 +1,5 @@
 blank_issues_enabled: false
 contact_links:
   - name: RCRD documentation
-    url: https://github.com/x-drybk/rcrd-discogs-bridge#readme
+    url: https://github.com/x-drybk/rcrd#readme
     about: Review setup, usage, and privacy guidance before opening an issue.
