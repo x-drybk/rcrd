@@ -1,0 +1,40 @@
+name: Feature idea
+description: Suggest a change that would make RCRD more useful.
+title: "[Idea]: "
+labels:
+  - enhancement
+  - user-feedback
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for sharing an idea. GitHub issues are public.
+
+        Do not include `.env` or `.data` contents, credentials, tokens, session details, Spotify history exports, personal listening history, or other private information.
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem would this solve?
+      description: Explain the user need before describing a solution.
+      placeholder: When I …, I need …, because …
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What would you like RCRD to do?
+      placeholder: Describe the behavior you would find useful.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Optional. Note any workaround or other approach you tried.
+  - type: checkboxes
+    id: privacy
+    attributes:
+      label: Privacy check
+      options:
+        - label: I removed credentials, tokens, session data, account identifiers, personal history, and other private information.
+          required: true

@@ -1,0 +1,21 @@
+{
+  "name": "rcrd-discogs-bridge",
+  "private": true,
+  "version": "1.3.38",
+  "description": "Local server bridge for the RCRD Discogs integration",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node tests/run.cjs",
+    "test:layout": "node tests/spotify-list-layout.browser.cjs",
+    "test:launcher": "powershell -NoProfile -ExecutionPolicy Bypass -File tests/launcher.test.ps1",
+    "test:history-parser": "powershell -NoProfile -ExecutionPolicy Bypass -File tests/history-parser.test.ps1",
+    "test:share": "powershell -NoProfile -ExecutionPolicy Bypass -File tests/share-package.test.ps1",
+    "launch": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/Start-RCRD.ps1 -RcrdChrome",
+    "restart": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/Start-RCRD.ps1 -Action restart -NoBrowser",
+    "stop": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/Start-RCRD.ps1 -Action stop",
+    "status": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/Start-RCRD.ps1 -Action status"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

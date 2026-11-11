@@ -1,0 +1,11 @@
+{
+  "name": "RCRD",
+  "short_name": "RCRD",
+  "theme_color": "#111813",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "icons": [
+    { "src": "assets/rcrd-app-icon.png", "sizes": "512x512", "type": "image/png" }
+  ]
+}
