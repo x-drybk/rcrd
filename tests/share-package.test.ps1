@@ -5,6 +5,8 @@ $included = @(& $builder -ListIncludedFiles)
 if ($included.Count -lt 10 -or $included -notcontains 'README.md') { throw 'The share-package manifest is incomplete.' }
 if ($included -notcontains 'assets/spotify-icon-white.svg') { throw 'The share-package manifest omits the Spotify icon.' }
 if ($included -notcontains 'assets/rcrd-cover-placeholder.webp') { throw 'The share-package manifest omits the disconnected cover artwork.' }
+if ($included -notcontains 'assets/rcrd-project-overview.png') { throw 'The share-package manifest omits the project overview screenshot.' }
+if ($included -notcontains 'LICENSE') { throw 'The share-package manifest omits the license.' }
 if ($included -notcontains 'walkthrough/RCRD-complete-walkthrough.mp4' -or $included -notcontains 'walkthrough/RCRD-complete-walkthrough-transcript.md') { throw 'The share-package manifest omits the in-app walkthrough.' }
 if ($included | Where-Object { $_ -match '(^|/)(\.env$|\.data|desktop-prototype|tests|release)|\.key$|\.enc$|\.dmp$' }) { throw 'The share-package manifest includes a private path.' }
 $safeExample = @(
