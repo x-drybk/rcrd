@@ -1,5 +1,13 @@
 # RCRD — Start here
 
+## Download RCRD from GitHub
+
+1. Open the [RCRD GitHub repository](https://github.com/x-drybk/rcrd).
+2. Select the green **Code** button, then choose **Download ZIP**. You do not need to sign in or install Git.
+3. When the download finishes, open your **Downloads** folder.
+4. Right-click the downloaded ZIP file (its name may look like `rcrd-main.zip`), select **Extract All...**, then select **Extract**.
+5. Open the extracted folder (its name may look like `rcrd-main`) and open `README.md`. Continue with **First-time setup** below.
+
 RCRD is a local-first Spotify and Discogs bridge for listening, catalog discovery, and collection/wantlist workflows. Developer secrets and refresh tokens stay on the local server; Spotify playback uses a short-lived access token in the browser.
 
 ## Find what you need
