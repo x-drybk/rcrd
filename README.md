@@ -1,5 +1,34 @@
 # RCRD — Start here
 
+**A local-first music companion that brings Spotify listening, playback, and discovery together with Discogs collection, wantlist, and release data.**
+
+![RCRD connects Spotify listening and playback with Discogs record discovery](assets/rcrd-project-overview.png)
+
+RCRD is a personal music workspace for moving between what you stream and the physical releases you collect or want to find. It runs on your own computer: developer credentials, refresh tokens, listening-history summaries, and browser data remain local rather than being sent to a hosted RCRD service.
+
+[Watch the complete walkthrough](walkthrough/RCRD-complete-walkthrough.mp4) or read its [accessible transcript](walkthrough/RCRD-complete-walkthrough-transcript.md).
+
+## What RCRD does
+
+- Browse and play Spotify albums, playlists, saved music, recent listening, and personalized discovery.
+- Explore a Discogs collection and wantlist alongside related Spotify releases.
+- Search Discogs editions and compare pressing details without losing the listening context.
+- Build a 100-song Spotify mix from a seed artist using bounded, explainable discovery sources.
+- Optionally import Spotify Extended Streaming History for local play-count context.
+- Optionally look up the current song on Genius without storing lyric text.
+
+## Engineering highlights
+
+- Reconciles Spotify recordings with Discogs releases while treating ambiguous editions as possible matches rather than false certainties.
+- Keeps OAuth credentials and long-lived authorization state on a loopback-only Node server.
+- Handles provider throttling, stale caches, interrupted requests, account changes, and partial data explicitly.
+- Includes responsive layouts, keyboard-accessible controls, reduced-motion behavior, and readable empty, loading, retry, and error states.
+- Ships with an automated test suite covering the UI, provider boundaries, playback behavior, security controls, and Windows launcher.
+
+## Project boundaries
+
+RCRD is designed for one person on one trusted computer. It is a portfolio and source-review project, not a hosted multi-user service. Do not expose its local server to a shared network or the public internet without a separate security review and deployment design.
+
 ## Download RCRD from GitHub
 
 1. Open the [RCRD GitHub repository](https://github.com/x-drybk/rcrd).
@@ -7,8 +36,6 @@
 3. When the download finishes, open your **Downloads** folder.
 4. Right-click the downloaded ZIP file (its name may look like `rcrd-main.zip`), select **Extract All...**, then select **Extract**.
 5. Open the extracted folder (its name may look like `rcrd-main`) and open `README.md`. Continue with **First-time setup** below.
-
-RCRD is a local-first Spotify and Discogs bridge for listening, catalog discovery, and collection/wantlist workflows. Developer secrets and refresh tokens stay on the local server; Spotify playback uses a short-lived access token in the browser.
 
 ## Find what you need
 
@@ -103,4 +130,4 @@ Created by Kevin M. Byrd with ChatGPT.
 
 ## License
 
-This project is currently provided as source code for local project use and experimentation. Add a license file before publishing it publicly in a broader or formal distribution context.
+RCRD is available under the [MIT License](LICENSE).
