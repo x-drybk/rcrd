@@ -52,8 +52,8 @@ function harness(fetch = async () => ({ ok: true, json: async () => ({}) }), ext
     spotifyLibraryProgressTimer=null,spotifyLibraryProgressBusy=false,spotifyLibraryLastUpdated=0,spotifyLibraryLastUpdatedGeneration=-1,spotifyLibrarySyncSource='live',spotifyNoticeTimer=null,
     spotifyCanModifyLibrary=false,likedStatus=null,likedCheckPending=false,likedRequestRevision=0,
     likedMutationPending=false,spotifyLibraryRevision=0,spotifyLibraryNeedsRefresh=false,
-    spotifyDeviceId=null,spotifyTargetDeviceId=null,spotifyTargetSupportsVolume=true,spotifyDeviceRequestRevision=0,spotifyDeviceRefreshTimer=null,spotifyDeviceRefreshBusy=0,spotifyDeviceRefreshEnabled=false,availableSpotifyDevices=new Map(),spotifySyncTimer=null,spotifyProgressTimer=null,spotifyPlayerReadyTimer=null,spotifyPlayer=null,spotifyPlayerConnectFailed=false,spotifyDurationMs=0,spotifyPositionMs=0,spotifyProgressUpdatedAt=0,spotifyPlaybackStateRevision=0,spotifySdkStateRevision=0,
-    spotifyHealthConnection=null,spotifyCanStream=null,spotifyPlayerState='waiting',spotifyPlayerIssue='',spotifyActiveDevice='Not checked',spotifyPlaybackSyncGeneration=null,spotifyPlaybackSyncAgain=false,ambientLastActivity=Date.now(),
+    spotifyDeviceId=null,spotifyTargetDeviceId=null,spotifyPlayerTransfer=null,spotifyTargetSupportsVolume=true,spotifyDeviceRequestRevision=0,spotifyDeviceRefreshTimer=null,spotifyDeviceRefreshBusy=0,spotifyDeviceRefreshEnabled=false,availableSpotifyDevices=new Map(),spotifySyncTimer=null,spotifyProgressTimer=null,spotifyPlayerReadyTimer=null,spotifyPlayer=null,spotifyPlayerConnectFailed=false,spotifyDurationMs=0,spotifyPositionMs=0,spotifyProgressUpdatedAt=0,spotifyPlaybackStateRevision=0,spotifySdkStateRevision=0,
+    spotifyHealthConnection=null,spotifyCanStream=null,spotifyPlayerState='waiting',spotifyPlayerIssue='',spotifyActiveDevice='Not checked',spotifyPlayerAuthRecoveryAttempted=false,spotifyPlaybackSyncGeneration=null,spotifyPlaybackSyncAgain=false,ambientLastActivity=Date.now(),
     spotifySkipQueue=Promise.resolve(),spotifySkipPending=0,spotifySkipBusy={next:0,previous:0},spotifyToggleQueue=Promise.resolve(),spotifyTogglePending=0,spotifyModeQueue=Promise.resolve(),spotifyPlaybackStartPending=0,recentTracksData=[],playing=false,
     spotifyLibraryPage=1,spotifyPageSize=24,spotifyLibraryMode='grid',spotifyLibrarySort='recent',spotifyPlaylistSequence=0,
     spotifySearchMode='library',spotifySearchSequence=0,spotifySearchTimer=null,spotifySearchCompletion=null,collectionSpotifyLookup=null,spotifyCatalogResults=[],spotifyCatalogAlbumView=null,volume=0.65,
@@ -2701,13 +2701,13 @@ test('re-registration invalidates an old device-list response before refreshing 
   assert.match(h.node('#playbackDeviceList').innerHTML,/new-local/);assert.doesNotMatch(h.node('#playbackDeviceList').innerHTML,/old-local/);
 });
 
-test('SDK failure clears only its own stale playback target and ignores disconnect callbacks', async () => {
+test('SDK account failure clears only its own stale playback target and ignores disconnect callbacks', async () => {
   for(const target of ['local-player','external-player']){
     let player;
     class FakePlayer{constructor(){this.listeners={};player=this;}addListener(name,callback){this.listeners[name]=callback;}connect(){return Promise.resolve(true);}disconnect(){void this.listeners.ready?.({device_id:'retired-device'});}}
     const h=harness(undefined,{window:{Spotify:{},setInterval(){}},Spotify:{Player:FakePlayer},transferSpotifyPlayback:async()=>true,syncCurrentSpotifyTrack(){}});
     h.load('initSpotifyPlayer');await h.run('initSpotifyPlayer()');await player.listeners.ready({device_id:'local-player'});
-    h.run(`spotifyTargetDeviceId='${target}'`);player.listeners.authentication_error();
+    h.run(`spotifyTargetDeviceId='${target}'`);player.listeners.account_error();
     assert.equal(h.run('spotifyDeviceId'),null);assert.equal(h.run('spotifyPlayerState'),'error');
     assert.equal(h.run('spotifyTargetDeviceId'),target==='local-player'?null:'external-player');
   }
@@ -2897,8 +2897,8 @@ test('Spotify SDK errors identify initialization, playback, and autoplay failure
   assert.equal(h.run('spotifyPlayerConnectFailed'), false);
 });
 
-test('Spotify SDK account and authentication failures clear the player without leaking provider text', async () => {
-  for (const event of ['account_error', 'authentication_error']) {
+test('Spotify SDK account failure clears the player without leaking provider text', async () => {
+  for (const event of ['account_error']) {
     const pending = deferred();
     const toasts = [];
     let player;
@@ -2924,6 +2924,175 @@ test('Spotify SDK account and authentication failures clear the player without l
     assert.equal(toasts.length, 1);
     assert.doesNotMatch(toasts[0], /synthetic-private-provider-text/);
   }
+});
+
+test('Play waits for the Ready transfer, then uses the one listed RCRD device', async () => {
+  const firstTransfer=deferred(), requests=[];
+  let player, transfers=0;
+  class FakePlayer {
+    constructor(){this.listeners={};player=this;}
+    addListener(name,callback){this.listeners[name]=callback;}
+    connect(){return Promise.resolve(true);}
+    disconnect(){}
+  }
+  const h=harness(async (url,options)=>{
+    requests.push({url,options});
+    return {ok:true,json:async()=>url==='/api/spotify/devices'?{devices:[{id:'listed-rcrd',name:'RCRD · Spotify'}]}:{ok:true}};
+  }, {
+    window:{Spotify:{},setInterval(){}},Spotify:{Player:FakePlayer},
+    transferSpotifyPlayback:()=>{transfers++;return firstTransfer.promise},
+    syncCurrentSpotifyTrack(){}
+  });
+  h.load('activateListedRcrdDevice','initSpotifyPlayer','spotifyPlaybackRequest');
+  await h.run('initSpotifyPlayer()');
+  const ready=player.listeners.ready({device_id:'new-rcrd-device'});
+  const play=h.run('spotifyPlaybackRequest("start",{uri:"spotify:track:"+"A".repeat(22),device_id:"new-rcrd-device"})');
+  await new Promise(setImmediate);
+  assert.equal(requests.length,0,'Play must wait for the first transfer result');
+  firstTransfer.resolve(false);
+  await Promise.all([ready,play]);
+  assert.equal(transfers,1,'the failed SDK ID is not transferred again');
+  assert.deepEqual(requests.map(request=>request.url),['/api/spotify/devices','/api/spotify/transfer','/api/spotify/playback']);
+  assert.equal(JSON.parse(requests[1].options.body).device_id,'listed-rcrd');
+  assert.equal(JSON.parse(requests[2].options.body).device_id,'listed-rcrd');
+  assert.equal(h.run('spotifyTargetDeviceId'),'listed-rcrd');
+});
+
+test('Play does not send a command when RCRD activation still fails', async () => {
+  const requests=[];let player,transfers=0;
+  class FakePlayer {
+    constructor(){this.listeners={};player=this;}
+    addListener(name,callback){this.listeners[name]=callback;}
+    connect(){return Promise.resolve(true);}
+    disconnect(){}
+  }
+  const h=harness(async url=>{requests.push(url);return {ok:true,json:async()=>url==='/api/spotify/devices'?{devices:[]}:{ok:true}}}, {
+    window:{Spotify:{},setInterval(){}},Spotify:{Player:FakePlayer},
+    transferSpotifyPlayback:async()=>{transfers++;return false},syncCurrentSpotifyTrack(){}
+  });
+  h.load('activateListedRcrdDevice','initSpotifyPlayer','spotifyPlaybackRequest');
+  await h.run('initSpotifyPlayer()');
+  await player.listeners.ready({device_id:'new-rcrd-device'});
+  await assert.rejects(h.run('spotifyPlaybackRequest("start",{uri:"spotify:track:"+"A".repeat(22)})'),/not activated/);
+  assert.equal(transfers,1);
+  assert.deepEqual(requests,['/api/spotify/devices']);
+});
+
+test('automatic RCRD selection refuses ambiguous and restricted device lists', async () => {
+  const listed={id:'listed-rcrd',name:'RCRD · Spotify'};
+  for(const devices of [[listed,{id:'other-rcrd',name:'RCRD · Spotify'}],[{...listed,is_restricted:true}]]){
+    const requests=[];
+    const h=harness(async url=>{requests.push(url);return {ok:true,json:async()=>({devices})}}, {window:{setInterval(){}}});
+    h.load('activateListedRcrdDevice');
+    h.run("spotifyDeviceId='sdk-rcrd';spotifyTargetDeviceId='sdk-rcrd'");
+    assert.equal(await h.run("activateListedRcrdDevice(0,'sdk-rcrd')"),false);
+    assert.deepEqual(requests,['/api/spotify/devices']);
+    assert.equal(h.run('spotifyTargetDeviceId'),'sdk-rcrd');
+  }
+});
+
+test('a local playback 404 transfers the listed RCRD device and retries the same track', async () => {
+  const requests=[];let trackChecks=0;
+  const h=harness(async (url,options)=>{
+    requests.push({url,body:options?.body?JSON.parse(options.body):null});
+    if(url==='/api/spotify/devices')return {ok:true,json:async()=>({devices:[{id:'listed-rcrd',name:'RCRD · Spotify'}]})};
+    if(url==='/api/spotify/transfer')return {ok:true};
+    return requests.filter(request=>request.url==='/api/spotify/playback').length===1
+      ? {ok:false,json:async()=>({error:'Spotify request failed (HTTP 404).',code:'SPOTIFY_NOT_FOUND'})}
+      : {ok:true,json:async()=>({ok:true})};
+  },{window:{setInterval:()=>1},syncCurrentSpotifyTrack:()=>{trackChecks++}});
+  h.load('activateListedRcrdDevice','spotifyPlaybackRequest');
+  h.run("spotifyPlayer={};spotifyDeviceId='new-rcrd';spotifyTargetDeviceId='new-rcrd';spotifyPlayerTransfer={deviceId:'new-rcrd',promise:Promise.resolve(true)}");
+  await h.run('spotifyPlaybackRequest("start",{uri:"spotify:track:"+"A".repeat(22),device_id:"new-rcrd"})');
+  assert.deepEqual(requests.map(request=>request.url),['/api/spotify/playback','/api/spotify/devices','/api/spotify/transfer','/api/spotify/playback']);
+  assert.equal(requests[0].body.uri,requests[3].body.uri,'the selected track is preserved');
+  assert.equal(requests[3].body.device_id,'listed-rcrd');
+  assert.equal(trackChecks,2,'the listed device starts polling and refreshes the track bar after Play');
+});
+
+test('local playback recovery is bounded and never steals an external device', async () => {
+  for(const external of [false,true]){
+    const requests=[];
+    const h=harness(async url=>{
+      requests.push(url);
+      if(url==='/api/spotify/devices')return {ok:true,json:async()=>({devices:[{id:'listed-rcrd',name:'RCRD · Spotify'}]})};
+      if(url==='/api/spotify/transfer')return {ok:true};
+      return {ok:false,json:async()=>({error:'Spotify request failed (HTTP 404).',code:'SPOTIFY_NOT_FOUND'})};
+    },{window:{setInterval(){}}});
+    h.load('activateListedRcrdDevice','spotifyPlaybackRequest');
+    h.run(`spotifyPlayer={};spotifyDeviceId='new-rcrd';spotifyTargetDeviceId='${external?'external-device':'new-rcrd'}';spotifyPlayerTransfer={deviceId:'new-rcrd',promise:Promise.resolve(true)}`);
+    await assert.rejects(h.run('spotifyPlaybackRequest("start",{uri:"spotify:track:"+"A".repeat(22)})'),/HTTP 404/);
+    assert.deepEqual(requests,external?['/api/spotify/playback']:['/api/spotify/playback','/api/spotify/devices','/api/spotify/transfer','/api/spotify/playback']);
+  }
+});
+
+test('disconnect during local playback recovery cancels the retry', async () => {
+  const transfer=deferred(),requests=[];
+  const h=harness(async url=>{
+    requests.push(url);
+    if(url==='/api/spotify/devices')return {ok:true,json:async()=>({devices:[{id:'listed-rcrd',name:'RCRD · Spotify'}]})};
+    if(url==='/api/spotify/transfer')return transfer.promise;
+    return {ok:false,json:async()=>({error:'Spotify request failed (HTTP 404).',code:'SPOTIFY_NOT_FOUND'})};
+  });
+  h.load('activateListedRcrdDevice','spotifyPlaybackRequest');
+  h.run("spotifyPlayer={};spotifyDeviceId='new-rcrd';spotifyTargetDeviceId='new-rcrd';spotifyPlayerTransfer={deviceId:'new-rcrd',promise:Promise.resolve(true)}");
+  const play=h.run('spotifyPlaybackRequest("start",{uri:"spotify:track:"+"A".repeat(22)})');
+  await new Promise(setImmediate);
+  h.run('spotifyConnected=false;++spotifyAccountGeneration');
+  transfer.resolve(true);
+  await assert.rejects(play,/no longer connected/);
+  assert.deepEqual(requests,['/api/spotify/playback','/api/spotify/devices','/api/spotify/transfer']);
+});
+
+test('Spotify SDK authentication failure refreshes once and registers a new player', async () => {
+  const players = [], requests = [], toasts = [];
+  class FakePlayer {
+    constructor() { this.listeners = {}; players.push(this); }
+    addListener(name, callback) { this.listeners[name] = callback; }
+    connect() { return Promise.resolve(true); }
+    disconnect() {}
+  }
+  const h = harness(async (url, options) => {
+    requests.push({ url, options });
+    return { ok: true };
+  }, { window: { Spotify: {}, setInterval() {} }, Spotify: { Player: FakePlayer }, showToast: message => toasts.push(message), transferSpotifyPlayback: async () => true });
+  h.load('initSpotifyPlayer', 'retrySpotifyPlayer');
+  h.run('renderSpotifyConnectionStatus({connected:true})');
+  await h.run('initSpotifyPlayer()');
+  players[0].listeners.authentication_error({ message: 'synthetic-private-provider-text' });
+  await new Promise(setImmediate);
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].url, '/api/spotify/token/refresh');
+  assert.equal(requests[0].options.method, 'POST');
+  assert.equal(requests[0].options.headers['X-RCRD-Request'], '1');
+  assert.equal(players.length, 2);
+  assert.equal(h.node('#playbackHealthPlayer').textContent, 'Starting player');
+  await players[1].listeners.ready({ device_id: 'synthetic-new-device' });
+  assert.equal(h.node('#playbackHealthPlayer').textContent, 'Ready');
+  players[1].listeners.authentication_error({ message: 'synthetic-private-provider-text' });
+  assert.equal(requests.length, 1, 'a second auth error does not loop through refresh');
+  assert.equal(h.node('#playbackHealthPlayer').textContent, 'Unavailable');
+  assert.equal(toasts.some(message => message.includes('synthetic-private-provider-text')), false);
+});
+
+test('failed Spotify token recovery leaves an actionable unavailable player', async () => {
+  const players = [], toasts = [];
+  class FakePlayer {
+    constructor() { this.listeners = {}; players.push(this); }
+    addListener(name, callback) { this.listeners[name] = callback; }
+    connect() { return Promise.resolve(true); }
+    disconnect() {}
+  }
+  const h = harness(async () => ({ ok: false, status: 503 }), { window: { Spotify: {}, setInterval() {} }, Spotify: { Player: FakePlayer }, showToast: message => toasts.push(message) });
+  h.load('initSpotifyPlayer', 'retrySpotifyPlayer');
+  h.run('renderSpotifyConnectionStatus({connected:true})');
+  await h.run('initSpotifyPlayer()');
+  players[0].listeners.authentication_error();
+  await new Promise(setImmediate);
+  assert.equal(players.length, 1);
+  assert.equal(h.node('#playbackHealthPlayer').textContent, 'Unavailable');
+  assert.match(h.node('#playbackHealthHelp').textContent, /Retry player/);
+  assert.equal(toasts.length, 1);
 });
 
 test('an offline Spotify SDK device is no longer used for Start or Play', async () => {

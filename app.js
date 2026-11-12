@@ -48,8 +48,8 @@ function scheduleSpotifyPlayCounts(records){
 }
 let spotifyLibraryPlaybackRecords=[];
 let playing=false;
-let spotifyPlayer=null;let spotifyPlayerConnectFailed=false;let spotifyDeviceId=null;let spotifyTargetDeviceId=null;let spotifyTargetSupportsVolume=true;let spotifyDeviceRequestRevision=0;let spotifyDeviceRefreshTimer=null;let spotifyDeviceRefreshBusy=0;let spotifyDeviceRefreshEnabled=false;let spotifySyncTimer=null;let spotifyProgressTimer=null;let spotifyPlayerReadyTimer=null;let spotifyTrackUri=null;let spotifyDurationMs=0;let spotifyPositionMs=0;let spotifyProgressUpdatedAt=0;let spotifyPlaybackStateRevision=0;let spotifySdkStateRevision=0;let spotifySkipQueue=Promise.resolve();let spotifySkipPending=0;let spotifySkipBusy={next:0,previous:0};let spotifyToggleQueue=Promise.resolve();let spotifyTogglePending=0;let spotifyModeQueue=Promise.resolve();let spotifyPlaybackStartPending=0;let volume=uiPreferences.volume/100;let volumeBeforeMute=uiPreferences.volumeBeforeMute/100;let shuffleEnabled=false;let repeatMode='off';let spotifyHasContext=false;let shuffleRequestPending=false;let shuffleRevision=0;let repeatRequestPending=false;let repeatRevision=0;
-let spotifyHealthConnection=null;let spotifyCanStream=null;let spotifyPlayerState='waiting';let spotifyPlayerIssue='';let spotifyActiveDevice='Not checked';let availableSpotifyDevices=new Map();
+let spotifyPlayer=null;let spotifyPlayerConnectFailed=false;let spotifyDeviceId=null;let spotifyTargetDeviceId=null;let spotifyPlayerTransfer=null;let spotifyTargetSupportsVolume=true;let spotifyDeviceRequestRevision=0;let spotifyDeviceRefreshTimer=null;let spotifyDeviceRefreshBusy=0;let spotifyDeviceRefreshEnabled=false;let spotifySyncTimer=null;let spotifyProgressTimer=null;let spotifyPlayerReadyTimer=null;let spotifyTrackUri=null;let spotifyDurationMs=0;let spotifyPositionMs=0;let spotifyProgressUpdatedAt=0;let spotifyPlaybackStateRevision=0;let spotifySdkStateRevision=0;let spotifySkipQueue=Promise.resolve();let spotifySkipPending=0;let spotifySkipBusy={next:0,previous:0};let spotifyToggleQueue=Promise.resolve();let spotifyTogglePending=0;let spotifyModeQueue=Promise.resolve();let spotifyPlaybackStartPending=0;let volume=uiPreferences.volume/100;let volumeBeforeMute=uiPreferences.volumeBeforeMute/100;let shuffleEnabled=false;let repeatMode='off';let spotifyHasContext=false;let shuffleRequestPending=false;let shuffleRevision=0;let repeatRequestPending=false;let repeatRevision=0;
+let spotifyHealthConnection=null;let spotifyCanStream=null;let spotifyPlayerState='waiting';let spotifyPlayerIssue='';let spotifyActiveDevice='Not checked';let availableSpotifyDevices=new Map();let spotifyPlayerAuthRecoveryAttempted=false;
 let spotifyCanModifyLibrary=false;let likedStatus=null;let likedRequestRevision=0;let likedCheckPending=false;let likedMutationPending=false;
 let spotifyMixRevision=0;let spotifyMixController=null;let spotifyMixPreview=null;
 function escapeHtml(value){return String(value??'').replace(/[&<>"']/g,character=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[character]))}
@@ -415,7 +415,7 @@ function resetSpotifyAccountUi(){resetSpotifyMix();spotifyCatalogAlbumView=null;
 function renderSpotifyConnectionStatus(status){
   spotifyHealthConnection=typeof status.connected==='boolean'?status.connected:null;
   spotifyCanStream=status.connected===false?false:typeof status.canStream==='boolean'?status.canStream:null;
-  if(status.connected===false)collectionSpotifyLookup=null;
+  if(status.connected===false){collectionSpotifyLookup=null;spotifyPlayerAuthRecoveryAttempted=false;spotifyPlayerTransfer=null}
   if(status.connected===false){spotifyTargetDeviceId=null;spotifyTargetSupportsVolume=true;++spotifyDeviceRequestRevision;spotifyDeviceRefreshBusy=0;spotifyDeviceRefreshEnabled=false;availableSpotifyDevices.clear();document.querySelector('#playbackDeviceList').hidden=true;document.querySelector('#playbackDeviceList').innerHTML='';syncSpotifyDeviceRefresh();document.querySelector('#volumeControl').disabled=false;renderVolumeControl();applySpotifyActionAvailability(null);spotifyCanReadTop=false;spotifyTopAlbums=[];spotifyTopRequest=null;homeDiscoveryMode='recent';homeRecommendationPage=1;document.querySelector('#homeSpotifyPagination').innerHTML='';document.querySelector('#homeDiscoveryTitle').textContent='For your ears';document.querySelector('#homeTopToggle').textContent='Long-term favorites'}
   renderPlaybackHealth();
   if(typeof status.connected!=='boolean'){
@@ -1052,6 +1052,27 @@ function syncSpotifyPlaybackPolling(){
   },3000);
 }
 async function transferSpotifyPlayback(){if(!spotifyDeviceId)return false;const generation=spotifyAccountGeneration;try{const response=await fetch('/api/spotify/transfer',{method:'PUT',headers:{'Content-Type':'application/json','X-RCRD-Request':'1'},body:JSON.stringify({device_id:spotifyDeviceId})});if(!spotifyConnected||generation!==spotifyAccountGeneration)return false;if(!response.ok){const data=await response.json().catch(()=>({}));throw new Error(data.error||'Could not activate the Spotify player')}return true}catch(error){if(spotifyConnected&&generation===spotifyAccountGeneration)showToast(error.message);return false}}
+async function activateListedRcrdDevice(generation,expectedDeviceId){
+  try{
+    const response=await fetch('/api/spotify/devices');
+    const data=await response.json();
+    if(!response.ok||!Array.isArray(data.devices))return false;
+    const matches=data.devices.filter(device=>device?.name==='RCRD · Spotify');
+    if(matches.length!==1)return false;
+    const device=matches[0];
+    if(device.is_restricted||typeof device.id!=='string'||!/^[A-Za-z0-9_-]{1,200}$/.test(device.id))return false;
+    if(!spotifyConnected||generation!==spotifyAccountGeneration||spotifyDeviceId!==expectedDeviceId||(spotifyTargetDeviceId||expectedDeviceId)!==expectedDeviceId)return false;
+    const moved=await fetch('/api/spotify/transfer',{method:'PUT',headers:{'Content-Type':'application/json','X-RCRD-Request':'1'},body:JSON.stringify({device_id:device.id})});
+    if(!moved.ok||!spotifyConnected||generation!==spotifyAccountGeneration||spotifyDeviceId!==expectedDeviceId||(spotifyTargetDeviceId||expectedDeviceId)!==expectedDeviceId)return false;
+    ++spotifyPlaybackStateRevision;
+    spotifyTargetDeviceId=device.id;spotifyTargetSupportsVolume=device.supports_volume!==false;
+    document.querySelector('#volumeControl').disabled=!spotifyTargetSupportsVolume;renderVolumeControl();
+    spotifyActiveDevice='RCRD · Spotify';renderPlaybackHealth();
+    document.querySelectorAll('.playback-device').forEach(item=>item.setAttribute('aria-pressed',String(item.dataset.deviceId===device.id)));
+    syncSpotifyPlaybackPolling();
+    return true;
+  }catch{return false}
+}
 async function initSpotifyPlayer(){
   if(!spotifyConnected||spotifyCanStream===false||spotifyPlayer||spotifyPlayerConnectFailed||!window.Spotify)return;
   spotifyPlayerState='starting';spotifyPlayerIssue='';renderPlaybackHealth();
@@ -1064,10 +1085,29 @@ async function initSpotifyPlayer(){
     catch{failPlayer('Spotify player token unavailable. Retry the player.')}
   }})}catch{spotifyPlayerConnectFailed=true;spotifyPlayerState='error';spotifyPlayerIssue='Spotify player could not initialize in this runtime. Retry the player.';renderPlaybackHealth();showToast(spotifyPlayerIssue);return}
   spotifyPlayer=player;
-  const failPlayer=message=>{if(!current())return;clearTimeout(spotifyPlayerReadyTimer);spotifyPlayerReadyTimer=null;spotifyPlayerConnectFailed=true;if(spotifyTargetDeviceId===spotifyDeviceId)spotifyTargetDeviceId=null;availableSpotifyDevices.delete(spotifyDeviceId);spotifyDeviceId=null;spotifyPlayerState='error';spotifyPlayerIssue=message;spotifyActiveDevice='Not checked';renderPlaybackHealth();if(spotifySyncTimer){clearInterval(spotifySyncTimer);spotifySyncTimer=null}spotifyPlayer=null;try{player.disconnect()}catch{}showToast(message)};
-  player.addListener('ready',async({device_id})=>{if(!current())return;if(typeof device_id!=='string'||!device_id){failPlayer('Spotify player did not provide a usable device. Retry the player.');return}clearTimeout(spotifyPlayerReadyTimer);spotifyPlayerReadyTimer=null;spotifyDeviceId=device_id;if(!spotifyTargetDeviceId){spotifyTargetDeviceId=device_id;spotifyTargetSupportsVolume=true}spotifyPlayerState='ready';spotifyPlayerIssue='';spotifyActiveDevice='Checking…';renderPlaybackHealth();showToast('Spotify player ready');if(spotifyTargetDeviceId===device_id)await transferSpotifyPlayback();if(current()){syncSpotifyPlaybackPolling();if(!document.querySelector('#playbackHealthPanel').hidden)void loadSpotifyDevices(true)}});
+  const failPlayer=(message,notify=true)=>{if(!current())return;clearTimeout(spotifyPlayerReadyTimer);spotifyPlayerReadyTimer=null;spotifyPlayerConnectFailed=true;if(spotifyTargetDeviceId===spotifyDeviceId)spotifyTargetDeviceId=null;availableSpotifyDevices.delete(spotifyDeviceId);spotifyDeviceId=null;spotifyPlayerState='error';spotifyPlayerIssue=message;spotifyActiveDevice='Not checked';renderPlaybackHealth();if(spotifySyncTimer){clearInterval(spotifySyncTimer);spotifySyncTimer=null}spotifyPlayer=null;try{player.disconnect()}catch{}if(notify)showToast(message)};
+  player.addListener('ready',async({device_id})=>{if(!current())return;if(typeof device_id!=='string'||!device_id){failPlayer('Spotify player did not provide a usable device. Retry the player.');return}clearTimeout(spotifyPlayerReadyTimer);spotifyPlayerReadyTimer=null;spotifyDeviceId=device_id;if(!spotifyTargetDeviceId){spotifyTargetDeviceId=device_id;spotifyTargetSupportsVolume=true}spotifyPlayerState='ready';spotifyPlayerIssue='';spotifyActiveDevice='Checking…';renderPlaybackHealth();showToast('Spotify player ready');if(spotifyTargetDeviceId===device_id){const transfer=transferSpotifyPlayback();spotifyPlayerTransfer={deviceId:device_id,promise:transfer};await transfer}if(current()){syncSpotifyPlaybackPolling();if(!document.querySelector('#playbackHealthPanel').hidden)void loadSpotifyDevices(true)}});
   player.addListener('not_ready',()=>{if(current()){clearTimeout(spotifyPlayerReadyTimer);spotifyPlayerReadyTimer=null;if(spotifyTargetDeviceId===spotifyDeviceId)spotifyTargetDeviceId=null;spotifyDeviceId=null;spotifyPlayerState='offline';spotifyPlayerIssue='The RCRD player went offline. Retry to reconnect it.';spotifyActiveDevice='Not checked';renderPlaybackHealth();syncSpotifyPlaybackPolling();showToast('Spotify player is offline')}});
-  player.addListener('authentication_error',()=>failPlayer('Spotify player authentication failed. Reconnect Spotify.'));
+  player.addListener('authentication_error',()=>{
+    const message='Spotify player authentication failed. Reconnect Spotify.';
+    if(!current())return;
+    if(spotifyPlayerAuthRecoveryAttempted){failPlayer(message);return}
+    spotifyPlayerAuthRecoveryAttempted=true;
+    failPlayer(message,false);
+    spotifyPlayerState='starting';spotifyPlayerIssue='Refreshing Spotify player authorization…';renderPlaybackHealth();
+    void (async()=>{
+      try{
+        const response=await fetch('/api/spotify/token/refresh',{method:'POST',headers:{'X-RCRD-Request':'1'}});
+        if(generation!==spotifyAccountGeneration||!spotifyConnected)return;
+        if(!response.ok)throw new Error(response.status===503?'Spotify player authorization could not be refreshed. Retry player.':message);
+        retrySpotifyPlayer();
+      }catch(error){
+        if(generation!==spotifyAccountGeneration||!spotifyConnected)return;
+        const issue=error.message===message?message:'Spotify player authorization could not be refreshed. Retry player.';
+        spotifyPlayerState='error';spotifyPlayerIssue=issue;renderPlaybackHealth();showToast(issue);
+      }
+    })();
+  });
   player.addListener('account_error',()=>failPlayer('Spotify Premium is required for playback in RCRD.'));
   player.addListener('initialization_error',()=>failPlayer('Spotify player could not initialize in this runtime. Protected playback may be unavailable.'));
   player.addListener('playback_error',()=>{if(current())showToast('Spotify could not play this track in RCRD.')});
@@ -1086,7 +1126,7 @@ function retrySpotifyPlayer(){
   clearTimeout(spotifyPlayerReadyTimer);spotifyPlayerReadyTimer=null;
   const oldPlayer=spotifyPlayer;const oldDevice=spotifyDeviceId;
   // Retire the player before disconnect(), which may synchronously emit SDK events.
-  spotifyPlayer=null;spotifyDeviceId=null;
+  spotifyPlayer=null;spotifyDeviceId=null;spotifyPlayerTransfer=null;
   if(spotifyTargetDeviceId===oldDevice)spotifyTargetDeviceId=null;
   ++spotifyDeviceRequestRevision;spotifyDeviceRefreshBusy=0;
   availableSpotifyDevices.delete(oldDevice);
@@ -1111,7 +1151,38 @@ document.addEventListener('visibilitychange',syncSpotifyPlaybackPolling);
 document.addEventListener('visibilitychange',()=>{syncSpotifyDeviceRefresh();if(document.visibilityState==='visible'&&!playbackHealthPanel.hidden&&!document.querySelector('#playbackDeviceList').hidden)loadSpotifyDevices(true)});
 window.addEventListener('focus',()=>{if(!playbackHealthPanel.hidden&&!document.querySelector('#playbackDeviceList').hidden)loadSpotifyDevices(true);syncSpotifyDeviceRefresh();if(spotifyConnected&&document.visibilityState!=='hidden')void syncCurrentSpotifyTrack(true)});
 window.addEventListener('blur',syncSpotifyDeviceRefresh);
-async function spotifyPlaybackRequest(action,details={}){if(!spotifyConnected)throw new Error('Connect Spotify to use playback controls');const target=spotifyTargetDeviceId||spotifyDeviceId;if((action==='start'||action==='play')&&!target)throw new Error('No Spotify playback device is ready. Choose a device from Playback health.');const generation=spotifyAccountGeneration;const response=await fetch('/api/spotify/playback',{method:'POST',headers:{'Content-Type':'application/json','X-RCRD-Request':'1'},body:JSON.stringify({action,device_id:target||undefined,...details})});const data=await response.json();if(!spotifyConnected||generation!==spotifyAccountGeneration)throw new Error('Spotify playback is no longer connected');if(!response.ok)throw new Error(data.error||'Spotify playback command failed');return data}
+async function spotifyPlaybackRequest(action,details={}){
+  if(!spotifyConnected)throw new Error('Connect Spotify to use playback controls');
+  let target=spotifyTargetDeviceId||spotifyDeviceId;
+  let commandDetails=details;
+  if((action==='start'||action==='play')&&!target)throw new Error('No Spotify playback device is ready. Choose a device from Playback health.');
+  const generation=spotifyAccountGeneration;
+  if((action==='start'||action==='play')&&target===spotifyDeviceId&&spotifyPlayer){
+    const pending=spotifyPlayerTransfer?.deviceId===target?spotifyPlayerTransfer.promise:null;
+    if(!pending||!await pending){
+      if(!await activateListedRcrdDevice(generation,target))throw new Error(!spotifyConnected||generation!==spotifyAccountGeneration?'Spotify playback is no longer connected':'RCRD player is ready but Spotify has not activated it. Retry play.');
+      target=spotifyTargetDeviceId;
+      commandDetails={...details,device_id:target};
+    }
+    if(!spotifyConnected||generation!==spotifyAccountGeneration||target!==(spotifyTargetDeviceId||spotifyDeviceId))throw new Error('Spotify playback is no longer connected');
+  }
+  const options={method:'POST',headers:{'Content-Type':'application/json','X-RCRD-Request':'1'},body:JSON.stringify({action,device_id:target||undefined,...commandDetails})};
+  let response=await fetch('/api/spotify/playback',options);
+  let data=await response.json();
+  if(!response.ok&&data.code==='SPOTIFY_NOT_FOUND'&&(action==='start'||action==='play')&&spotifyPlayer&&target===spotifyDeviceId&&target===(spotifyTargetDeviceId||spotifyDeviceId)&&spotifyConnected&&generation===spotifyAccountGeneration){
+    if(!await activateListedRcrdDevice(generation,target))throw new Error(!spotifyConnected||generation!==spotifyAccountGeneration?'Spotify playback is no longer connected':'RCRD player is ready but Spotify has not activated it. Retry play.');
+    target=spotifyTargetDeviceId;
+    commandDetails={...details,device_id:target};
+    if(!spotifyConnected||generation!==spotifyAccountGeneration||target!==(spotifyTargetDeviceId||spotifyDeviceId))throw new Error('Spotify playback is no longer connected');
+    options.body=JSON.stringify({action,...commandDetails});
+    response=await fetch('/api/spotify/playback',options);
+    data=await response.json();
+  }
+  if(!spotifyConnected||generation!==spotifyAccountGeneration)throw new Error('Spotify playback is no longer connected');
+  if(!response.ok)throw new Error(data.error||'Spotify playback command failed');
+  if((action==='start'||action==='play')&&target!==spotifyDeviceId)void syncCurrentSpotifyTrack(true);
+  return data;
+}
 async function activeLocalSpotifyPlayer(){const player=spotifyPlayer;const deviceId=spotifyDeviceId;const generation=spotifyAccountGeneration;if(!spotifyConnected||!player||!deviceId||(spotifyTargetDeviceId||deviceId)!==deviceId||typeof player.getCurrentState!=='function')return null;let state;try{state=await player.getCurrentState()}catch{return null}return spotifyConnected&&generation===spotifyAccountGeneration&&player===spotifyPlayer&&deviceId===spotifyDeviceId&&(spotifyTargetDeviceId||deviceId)===deviceId&&state?{player,state}:null}
 function mixTextKey(value){return String(value||'').normalize('NFKC').toLocaleLowerCase().replace(/\s+/g,' ').trim()}
 function spotifyMixTrack(track){

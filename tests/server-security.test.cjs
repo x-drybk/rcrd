@@ -594,6 +594,42 @@ test('simultaneous Spotify token consumers share one refresh and a failed refres
   assert.equal(tokenCalls, 3);
 }));
 
+test('player auth recovery refreshes a cached token with session and mutation checks', () => fixture(async ({ request, state }) => {
+  const cookie = { Cookie: `rcrd_session=${sessionId}` };
+  const mutation = { ...cookie, 'X-RCRD-Request': '1' };
+  let calls = 0;
+  state.providerFetch = async url => {
+    assert.equal(new URL(url).pathname, '/api/token');
+    calls++;
+    return providerJson({ access_token: `synthetic-access-${calls}`, expires_in: 3600 });
+  };
+  assert.equal(JSON.parse((await request('/api/spotify/token', { headers: cookie })).body).access_token, 'synthetic-access-1');
+  assert.equal((await request('/api/spotify/token/refresh', { method: 'POST', headers: cookie })).status, 403);
+  assert.equal((await request('/api/spotify/token/refresh', { method: 'POST', headers: { 'X-RCRD-Request': '1' } })).status, 401);
+  assert.equal(calls, 1);
+  const refreshed = await request('/api/spotify/token/refresh', { method: 'POST', headers: mutation });
+  assert.equal(refreshed.status, 200);
+  assert.deepEqual(JSON.parse(refreshed.body), { ok: true });
+  assert.equal(JSON.parse((await request('/api/spotify/token', { headers: cookie })).body).access_token, 'synthetic-access-2');
+  assert.equal(calls, 2);
+}, { spotifyScope: 'streaming' }));
+
+test('failed player auth recovery discards the rejected token for a later retry', () => fixture(async ({ request, state }) => {
+  const cookie = { Cookie: `rcrd_session=${sessionId}` };
+  let calls = 0;
+  state.providerFetch = async url => {
+    assert.equal(new URL(url).pathname, '/api/token');
+    calls++;
+    return calls === 2 ? providerJson({ error: 'temporarily_unavailable' }, 503) : providerJson({ access_token: `synthetic-access-${calls}`, expires_in: 3600 });
+  };
+  assert.equal(JSON.parse((await request('/api/spotify/token', { headers: cookie })).body).access_token, 'synthetic-access-1');
+  const failed = await request('/api/spotify/token/refresh', { method: 'POST', headers: { ...cookie, 'X-RCRD-Request': '1' } });
+  assert.equal(failed.status, 503);
+  assert.doesNotMatch(failed.body, /synthetic-access|temporarily_unavailable/);
+  assert.equal(JSON.parse((await request('/api/spotify/token', { headers: cookie })).body).access_token, 'synthetic-access-3');
+  assert.equal(calls, 3);
+}, { spotifyScope: 'streaming' }));
+
 test('an old Spotify refresh cannot overwrite or disconnect a newly connected account', () => fixture(async ({ state, testSessions, testSpotifyAccess }) => {
   const session = testSessions.get(sessionId);
   let releaseRefresh;
@@ -786,6 +822,23 @@ test('Spotify playlist preview rejects unauthorized, malformed and excessive dat
   invalidPage = { items: {}, total: 1, next: null };
   assert.equal((await request(`${endpoint}&preview=1`, { headers: cookie })).status, 502);
   assert.equal(state.checkpointWrites.length, 0);
+}));
+
+test('playback 404 exposes only a sanitized recovery code', () => fixture(async ({ request, state }) => {
+  state.providerFetch = async url => {
+    const pathname = new URL(url).pathname;
+    if (pathname.endsWith('/api/token')) return providerJson({ access_token: 'synthetic-access', expires_in: 3600 });
+    assert.equal(pathname, '/v1/me/player/play');
+    return { ok: false, status: 404, headers: { get: () => null }, text: async () => JSON.stringify({ error: { message: 'synthetic-private-provider-text' } }) };
+  };
+  const response = await request('/api/spotify/playback', {
+    method: 'POST',
+    headers: { Cookie: `rcrd_session=${sessionId}`, 'X-RCRD-Request': '1', 'Content-Type': 'application/json' },
+    body: JSON.stringify({ action: 'start', uri: 'spotify:track:synthetictrack', device_id: 'synthetic-device' })
+  });
+  assert.equal(response.status, 502);
+  assert.deepEqual(JSON.parse(response.body), { error: 'Spotify request failed (HTTP 404).', code: 'SPOTIFY_NOT_FOUND' });
+  assert.doesNotMatch(response.body, /synthetic-private-provider-text/);
 }));
 
 test('starting a selected track keeps its validated album or playlist context for Next', () => fixture(async ({ request, state }) => {

@@ -587,11 +587,12 @@ function spotifyLibraryChanged(session, expectedVersion) {
   const error = new Error('Spotify saved library changed while loading. Try again.'); error.status = 409; throw error;
 }
 async function spotifyToken(body) { const auth = Buffer.from(`${config.spotify.clientId}:${config.spotify.clientSecret}`).toString('base64'); const { response, text } = await providerResponse(config.spotify.tokenUrl, { method: 'POST', headers: { Authorization: `Basic ${auth}`, 'Content-Type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams(body) }); const data = providerObject(text, 'Spotify authorization'); if (!response.ok) { const error = new Error('Spotify authorization request failed.'); error.code = data.error; error.status = response.status; throw error; } if (typeof data.access_token !== 'string' || !data.access_token || !Number.isFinite(data.expires_in) || data.expires_in <= 0 || (body.grant_type === 'authorization_code' && (typeof data.refresh_token !== 'string' || !data.refresh_token))) { const error = new Error('Spotify authorization returned incomplete credentials.'); error.status = 502; throw error; } return data; }
-async function spotifyAccess(session) {
+async function spotifyAccess(session, forceRefresh = false) {
   const spotify = session?.spotify;
   if (!config.spotify || !spotify?.refreshToken) return null;
-  if (spotify.accessToken && spotify.expiresAt > Date.now() + 60000) return spotify.accessToken;
   if (spotify.refreshPromise) return spotify.refreshPromise;
+  if (!forceRefresh && spotify.accessToken && spotify.expiresAt > Date.now() + 60000) return spotify.accessToken;
+  if (forceRefresh) { spotify.accessToken = null; spotify.expiresAt = 0; }
   const refresh = (async () => {
     try {
       const data = await spotifyToken({ grant_type: 'refresh_token', refresh_token: spotify.refreshToken });
@@ -1205,6 +1206,12 @@ async function handle(request, response) {
       if (!spotifyHasScope(session, 'streaming')) return send(response, 403, { error: 'Spotify playback permission is missing. Reconnect Spotify.' });
       try { const accessToken = await spotifyAccess(session); if (!spotifyHasScope(session, 'streaming')) return send(response, 403, { error: 'Spotify playback permission is missing. Reconnect Spotify.' }); return send(response, 200, { access_token: accessToken, expires_at: session.spotify.expiresAt }); } catch (error) { return send(response, 401, { error: error.code === 'invalid_grant' ? 'Spotify authorization expired. Reconnect Spotify.' : error.message, needsReauthorization: error.code === 'invalid_grant' }); }
     }
+    if (request.method === 'POST' && url.pathname === '/api/spotify/token/refresh') {
+      const session = sessionFor(request); if (!config.spotify || !session?.spotify?.refreshToken) return send(response, 401, { error: 'Connect Spotify first.' });
+      if (!spotifyHasScope(session, 'streaming')) return send(response, 403, { error: 'Spotify playback permission is missing. Reconnect Spotify.' });
+      try { await spotifyAccess(session, true); if (!spotifyHasScope(session, 'streaming')) return send(response, 403, { error: 'Spotify playback permission is missing. Reconnect Spotify.' }); return send(response, 200, { ok: true }); }
+      catch (error) { return send(response, error.code === 'invalid_grant' ? 401 : 503, { error: error.code === 'invalid_grant' ? 'Spotify authorization expired. Reconnect Spotify.' : 'Spotify player authorization could not be refreshed. Retry player.' }); }
+    }
     if (request.method === 'GET' && url.pathname === '/api/spotify/currently-playing') {
       const session = sessionFor(request); if (!session?.spotify?.refreshToken) return send(response, 401, { error: 'Connect Spotify first.' });
       try { return send(response, 200, await spotifyApi(session, '/me/player')); } catch (error) { return sendSpotifyError(response, error, 502, [401]); }
@@ -1477,7 +1484,7 @@ async function handle(request, response) {
           await spotifyApi(session, `/me/player/repeat?state=${enc(state)}${device ? `&${device}` : ''}`, { method: 'PUT' });
         }
         return send(response, 200, { ok: true });
-      } catch (error) { return sendSpotifyError(response, error, 502, [400, 401, 403]); }
+      } catch (error) { if (error.status === 404) return send(response, 502, { error: error.message, code: 'SPOTIFY_NOT_FOUND' }); return sendSpotifyError(response, error, 502, [400, 401, 403]); }
     }
     if (request.method === 'POST' && url.pathname === '/api/spotify/queue') {
       const session = sessionFor(request); if (!session?.spotify?.refreshToken) return send(response, 401, { error: 'Connect Spotify first.' });
