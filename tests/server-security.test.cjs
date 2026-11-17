@@ -11,6 +11,27 @@ const { EventEmitter } = require('node:events');
 const source = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
 const sessionId = 'a'.repeat(48);
 
+test('update check compares the package version with a validated GitHub release', () => fixture(async ({ request, state }) => {
+  state.providerFetch = async (url, options) => {
+    assert.equal(url, 'https://api.github.com/repos/x-drybk/rcrd/releases/latest');
+    assert.equal(options.redirect, 'error');
+    assert.equal(options.headers.Accept, 'application/vnd.github+json');
+    return new Response(JSON.stringify({ tag_name: 'v9.4.1', html_url: 'https://github.com/x-drybk/rcrd/releases/tag/v9.4.1', published_at: '2026-11-16T12:00:00Z' }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+  };
+  const response = await request('/api/update-check');
+  assert.equal(response.status, 200);
+  assert.deepEqual(JSON.parse(response.body), { currentVersion: '1.3.38', latestVersion: '9.4.1', updateAvailable: true, releaseUrl: 'https://github.com/x-drybk/rcrd/releases/tag/v9.4.1', publishedAt: '2026-11-16T12:00:00Z' });
+  assert.equal(state.externalCalls, 1);
+}));
+
+test('update check rejects malformed release metadata and does not expose it', () => fixture(async ({ request, state }) => {
+  state.providerFetch = async () => new Response(JSON.stringify({ tag_name: 'newest', html_url: 'https://example.test/download', private: 'do-not-return' }), { status: 200 });
+  const response = await request('/api/update-check');
+  assert.equal(response.status, 502);
+  assert.match(JSON.parse(response.body).error, /invalid version/);
+  assert.doesNotMatch(response.body, /do-not-return|example\.test/);
+}));
+
 function syntheticSessions(key, spotifyScope = '', sessionExpiresAt = null) {
   const iv = crypto.randomBytes(12);
   const cipher = crypto.createCipheriv('aes-256-gcm', key, iv);

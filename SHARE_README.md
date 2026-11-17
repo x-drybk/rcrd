@@ -14,6 +14,8 @@ After launch, open your profile menu → **Help & setup guide** → **Watch walk
 
 RCRD stores account authorization, Spotify library cache, and its dedicated browser profile under `.data` on your computer. Keep that directory private. Do not expose the local server to other machines or the internet. See the [Admin Guide](ADMIN_GUIDE.md) and [Security Note](SECURITY.md) for details.
 
+Use **Profile → About RCRD → Check for updates** to compare this copy with the latest published GitHub Release. Close RCRD before replacing application files, and preserve your existing `.env` and `.data` when installing the downloaded update.
+
 Optional recorded play counts can start with the account holder's Extended Streaming History ZIP from [Spotify Privacy](https://www.spotify.com/account/privacy/). After connecting the matching Spotify account, select **Settings → Your listening history → Import Spotify ZIP**. Saved music also adds newer Spotify recent-play events across devices, but long gaps can leave missing plays. RCRD keeps a local summary and recent-play ledger, not the raw ZIP; reimport a newer export to update the baseline. Use **Delete recorded counts** in the same Settings card before sharing the computer.
 
 Optional lyrics require a [Genius API client](https://genius.com/api-clients). Put its Client Access Token in `GENIUS_ACCESS_TOKEN` in your private `.env`, restart RCRD, and choose **Lyrics** in the track bar. RCRD sends the current title and artist to Genius only when requested, then displays a Genius-hosted view when available; Genius may receive your IP address. Lyrics are not stored by RCRD. If the hosted view cannot load, use **Read on Genius**. RCRD is independent and not affiliated with Genius. Keep the token out of source packages.

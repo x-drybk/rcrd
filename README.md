@@ -31,11 +31,11 @@ RCRD is designed for one person on one trusted computer. It is a portfolio and s
 
 ## Download RCRD from GitHub
 
-1. Open the [RCRD GitHub repository](https://github.com/x-drybk/rcrd).
-2. Select the green **Code** button, then choose **Download ZIP**. You do not need to sign in or install Git.
+1. Open the [latest RCRD release](https://github.com/x-drybk/rcrd/releases/latest). You do not need to sign in or install Git.
+2. Under **Assets**, select the file named `RCRD-<version>.zip` (not **Source code (zip)**).
 3. When the download finishes, open your **Downloads** folder.
-4. Right-click the downloaded ZIP file (its name may look like `rcrd-main.zip`), select **Extract All...**, then select **Extract**.
-5. Open the extracted folder (its name may look like `rcrd-main`) and open `README.md`. Continue with **First-time setup** below.
+4. Right-click the downloaded `RCRD-<version>.zip` file, select **Extract All...**, then select **Extract**.
+5. Open the extracted folder and open `README.md`. Continue with **First-time setup** below.
 
 ## Find what you need
 
@@ -111,6 +111,8 @@ npm run status
 ```
 
 On Windows, **Launch RCRD.cmd** (or `npm run launch`) starts the local server and opens RCRD in a Chrome app window without the normal tab and navigation rows. It uses a separate profile at `.data/chrome-profile`, not your normal Chrome profile; browser logins and preferences are not imported. When switching from the previous Firefox launcher, reconnect Spotify and Discogs once and set any browser-stored preferences again. Later launches retain this Chrome profile's cookies and preferences. **RCRD.cmd** provides restart and stop controls; a manual restart leaves the app window open, so reload it afterward. `npm start` starts only the server for ordinary browser use. Keep `.data` private because the profile contains browser session data.
+
+Use **Profile → About RCRD → Check for updates** to compare the installed version with the latest published GitHub Release. When an update is available, review and download it from the release page. Close RCRD before replacing application files, preserve the existing `.env` and `.data`, and relaunch it afterward.
 
 The Windows launcher creates new `.data` and browser-profile directories with private permissions for your Windows account, SYSTEM, and Administrators. It does not silently change permissions on an existing directory: `.data` must not inherit access, and neither it nor the browser profile may allow another account. A browser profile may inherit only those approved permissions from the protected `.data` directory. Back up `.data`, then use Windows **Properties → Security → Advanced** to review the directory and child items before changing access. `npm start` does not perform this Windows launcher check.
 

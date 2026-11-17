@@ -272,6 +272,7 @@ function handleProfileMenuClick(event){
 }
 document.addEventListener('click',handleProfileMenuClick);
 document.querySelector('#aboutDialogClose').addEventListener('click',()=>document.querySelector('#aboutDialog').close());
+document.querySelector('#updateDialogClose').addEventListener('click',()=>document.querySelector('#updateDialog').close());
 function isDialogBackdropPointer(event){
   const dialog=event.currentTarget;
   if(!dialog.open||event.target!==dialog)return false;
@@ -280,6 +281,26 @@ function isDialogBackdropPointer(event){
 }
 function handleAboutDialogBackdropPointer(event){if(isDialogBackdropPointer(event))event.currentTarget.close()}
 document.querySelector('#aboutDialog').addEventListener('pointerdown',handleAboutDialogBackdropPointer);
+document.querySelector('#updateDialog').addEventListener('pointerdown',handleAboutDialogBackdropPointer);
+
+async function checkForRcrdUpdates(){
+  const dialog=document.querySelector('#updateDialog');
+  const title=document.querySelector('#updateDialogTitle');
+  const message=document.querySelector('#updateDialogMessage');
+  const link=document.querySelector('#updateReleaseLink');
+  const help=document.querySelector('#updateInstallHelp');
+  const buttons=[...document.querySelectorAll('[data-check-updates]')];
+  title.textContent='Checking for updates…';message.textContent='Contacting GitHub for the latest published release.';link.hidden=true;help.hidden=true;buttons.forEach(button=>button.disabled=true);
+  if(!dialog.open)dialog.showModal();
+  try{
+    const response=await fetch('/api/update-check',{cache:'no-store'});const data=await response.json();
+    if(!response.ok)throw new Error(data.error||'Could not check for updates.');
+    if(data.updateAvailable){title.textContent=`RCRD ${data.latestVersion} is available`;message.textContent=`You have version ${data.currentVersion}. Review the release notes before downloading the update.`;link.href=data.releaseUrl;link.hidden=false;help.hidden=false}
+    else{title.textContent='RCRD is up to date';message.textContent=`Version ${data.currentVersion} is the latest published release.`}
+  }catch(error){title.textContent='Update check unavailable';message.textContent=error.message||'Could not check GitHub for updates.'}
+  finally{buttons.forEach(button=>button.disabled=false)}
+}
+document.addEventListener('click',event=>{if(event.target.closest('[data-check-updates]'))checkForRcrdUpdates()});
 function handleProfileMenuKeydown(event){
   if(event.key!=='Escape')return;
   const open=profileMenus.find(menu=>menu.open);

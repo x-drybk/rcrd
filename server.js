@@ -9,6 +9,7 @@ const { URL } = require('node:url');
 loadEnv();
 const root = __dirname;
 const appVersion = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8')).version;
+const githubLatestReleaseApi = 'https://api.github.com/repos/x-drybk/rcrd/releases/latest';
 const bindHost = '127.0.0.1';
 const port = Number(process.env.PORT || 3000);
 if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('PORT must be a valid TCP port.');
@@ -1149,6 +1150,23 @@ async function handle(request, response) {
     const callbackOrigin = new URL(config.spotify?.redirectUri || config.callbackUrl).origin;
     if (url.hostname === 'localhost' && callbackOrigin !== url.origin) return redirect(response, `${callbackOrigin}${url.pathname}${url.search}`);
     if (request.method === 'GET' && url.pathname === '/api/health') return send(response, 200, { ok: true, app: 'rcrd', version: appVersion, pid: process.pid });
+    if (request.method === 'GET' && url.pathname === '/api/update-check') {
+      try {
+        const { response: releaseResponse, text } = await providerResponse(githubLatestReleaseApi, { redirect: 'error', headers: { Accept: 'application/vnd.github+json', 'User-Agent': `RCRD/${appVersion}`, 'X-GitHub-Api-Version': '2022-11-28' } });
+        if (!releaseResponse.ok) throw new Error(releaseResponse.status === 404 ? 'No published RCRD release was found.' : 'GitHub could not check for updates right now.');
+        const release = JSON.parse(text);
+        const latestVersion = typeof release?.tag_name === 'string' ? release.tag_name.trim().replace(/^v/i, '') : '';
+        if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(latestVersion)) throw new Error('The latest GitHub release has an invalid version.');
+        const releaseUrl = typeof release.html_url === 'string' ? release.html_url : '';
+        if (!/^https:\/\/github\.com\/x-drybk\/rcrd\/releases\//.test(releaseUrl)) throw new Error('The latest GitHub release has an invalid address.');
+        const parts = version => version.split(/[+-]/, 1)[0].split('.').map(Number);
+        const current = parts(appVersion); const latest = parts(latestVersion);
+        const updateAvailable = latest.some((value, index) => value !== current[index] && latest.slice(0, index).every((prior, priorIndex) => prior === current[priorIndex]) && value > current[index]);
+        return send(response, 200, { currentVersion: appVersion, latestVersion, updateAvailable, releaseUrl, publishedAt: typeof release.published_at === 'string' ? release.published_at : null });
+      } catch (error) {
+        return send(response, 502, { error: error instanceof SyntaxError ? 'GitHub returned an invalid update response.' : error.message });
+      }
+    }
     if (request.method === 'GET' && url.pathname === '/genius-embed') {
       const id = url.searchParams.get('id');
       if (!id || !/^[1-9][0-9]{0,11}$/.test(id)) return send(response, 400, { error: 'Invalid Genius song.' });
