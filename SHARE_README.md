@@ -14,7 +14,7 @@ After launch, open your profile menu → **Help & setup guide** → **Watch walk
 
 RCRD stores account authorization, Spotify library cache, and its dedicated browser profile under `.data` on your computer. Keep that directory private. Do not expose the local server to other machines or the internet. See the [Admin Guide](ADMIN_GUIDE.md) and [Security Note](SECURITY.md) for details.
 
-Use **Profile → About RCRD → Check for updates** to compare this copy with the latest published GitHub Release. Close RCRD before replacing application files, and preserve your existing `.env` and `.data` when installing the downloaded update.
+On Windows, when RCRD was started with **Launch RCRD.cmd**, use **Profile → About RCRD → Check for updates** and choose **Install update** when a verified release is available. RCRD verifies the download, preserves `.env` and `.data`, then restarts. If automatic installation is unavailable, download the release ZIP, close RCRD, replace the application files, and keep your existing `.env` and `.data`.
 
 Optional recorded play counts can start with the account holder's Extended Streaming History ZIP from [Spotify Privacy](https://www.spotify.com/account/privacy/). After connecting the matching Spotify account, select **Settings → Your listening history → Import Spotify ZIP**. Saved music also adds newer Spotify recent-play events across devices, but long gaps can leave missing plays. RCRD keeps a local summary and recent-play ledger, not the raw ZIP; reimport a newer export to update the baseline. Use **Delete recorded counts** in the same Settings card before sharing the computer.
 
