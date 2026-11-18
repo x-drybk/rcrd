@@ -185,12 +185,12 @@ test('pre-launch documentation offers the same official setup destinations', () 
   assert.match(launcher, /Open README\.md for official download and first-run setup links/);
 });
 
-test('root README directs new users to setup and the bundled admin guide', () => {
+test('root README provides setup steps and links to the bundled admin guide', () => {
   const readme = fs.readFileSync(path.join(root, 'README.md'), 'utf8');
   const shareReadme = fs.readFileSync(path.join(root, 'SHARE_README.md'), 'utf8');
-  assert.match(readme, /^# RCRD — Start here/m);
-  assert.match(readme, /\[first-time setup\]\(#first-time-setup\)/);
-  assert.match(readme, /^## First-time setup$/m);
+  assert.match(readme, /^# RCRD local source package/m);
+  assert.match(readme, /^## Before starting$/m);
+  assert.match(readme, /Run `npm install`/);
   for (const content of [readme, shareReadme]) {
     assert.match(content, /\[Admin Guide\]\(ADMIN_GUIDE\.md\)/);
     assert.match(content, /\[Security Note\]\(SECURITY\.md\)/);
