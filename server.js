@@ -1217,14 +1217,20 @@ async function requestServerUpdate() {
     await downloadRcrdUpdate(asset, archive);
     writeUpdateStatus('installing', version);
     const handoffId = random(); readyFile = path.join(runtimeDirectory, `update-ready-${handoffId}`);
-    child = spawn('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', path.join(root, 'scripts', 'Update-RCRD.ps1'), '-ProjectRoot', root, '-ArchivePath', archive, '-Version', version, '-ExpectedSha256', asset.sha256, '-ParentPid', String(process.pid), '-Port', String(port), '-NodeExe', process.execPath, '-HandoffId', handoffId], { cwd: root, detached: true, windowsHide: true, stdio: 'ignore' });
+    const helperLogPath = path.join(runtimeDirectory, 'update-helper-error.log');
+    const helperLog = fs.openSync(helperLogPath, 'w', 0o600);
+    try { child = spawn(process.execPath, [path.join(root, 'scripts', 'Launch-RCRD-Update.cjs'), String(process.pid), String(port), handoffId, archive, version, asset.sha256], { cwd: root, detached: true, windowsHide: true, stdio: ['ignore', helperLog, helperLog] }); }
+    finally { fs.closeSync(helperLog); }
     await new Promise((resolve, reject) => {
       const deadline = Date.now() + 5000; let settled = false;
-      const finish = error => { if (settled) return; settled = true; clearInterval(poll); child.off('error', onError); child.off('exit', onExit); if (error) reject(error); else resolve(); };
+      const finish = error => { if (settled) return; settled = true; clearInterval(poll); child.off('error', onError); child.off('close', onExit); if (error) reject(error); else resolve(); };
       const onError = error => finish(error);
-      const onExit = () => finish(new Error('Update helper exited before installation.'));
+      const onExit = code => {
+        try { fs.appendFileSync(helperLogPath, `\nUpdate helper exited with code ${code} at ${new Date().toISOString()}.\n`); } catch {}
+        finish(new Error('Update helper exited before installation. See .data/update-helper-error.log for details.'));
+      };
       const poll = setInterval(() => { try { if (fs.readFileSync(readyFile, 'utf8') === handoffId) return finish(); return finish(new Error('Invalid update handoff.')); } catch (error) { if (error.code !== 'ENOENT') return finish(error); } if (Date.now() >= deadline) finish(new Error('Update helper did not become ready.')); }, 50);
-      child.once('error', onError); child.once('exit', onExit);
+      child.once('error', onError); child.once('close', onExit);
     });
     child.unref();
     try { fs.unlinkSync(readyFile); } catch {}
