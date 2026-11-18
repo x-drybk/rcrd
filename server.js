@@ -60,12 +60,19 @@ const spotifyCheckpointRoot = path.join(runtimeDirectory, 'spotify-checkpoints')
 const sessionStoreFile = path.join(runtimeDirectory, 'oauth-sessions.enc');
 const sessionKeyFile = path.join(runtimeDirectory, 'oauth-session.key');
 const listeningHistoryRoot = path.join(runtimeDirectory, 'listening-history');
+const collectionNotesRoot = path.join(runtimeDirectory, 'collection-notes');
+const notificationLogFile = path.join(runtimeDirectory, 'notifications.log');
 const historyImports = new Set();
 const maxHistoryArchiveBytes = 256 * 1024 * 1024;
 const historyPageSize = 12;
 let spotifyDiskCache = loadSpotifyDiskCache();
 migrateSpotifyProfileCache();
 loadPersistentSessions();
+
+function logNotification(event, details = {}) {
+  try { fs.appendFileSync(notificationLogFile, `${JSON.stringify({ timestamp: new Date().toISOString(), event, ...details })}\n`, { encoding: 'utf8', mode: 0o600 }); }
+  catch (error) { console.error('Could not write notification log:', error.code || error.name); }
+}
 
 function loadEnv() {
   const file = path.join(__dirname, '.env');
@@ -403,7 +410,7 @@ function readRecentPlays(session) {
   catch (error) { if (error.code === 'ENOENT') return { version: 1, lastSynced: 0, ignoreBefore: 0, events: [] }; throw new Error('Could not read local recent plays. Back up the .data folder before retrying.'); }
   try {
     const value = JSON.parse(raw);
-    if (value?.version !== 1 || !Number.isSafeInteger(value.lastSynced) || !Number.isSafeInteger(value.ignoreBefore || 0) || !Array.isArray(value.events) || value.events.length > 100000 || value.events.some(event => !spotifyTrackUri(event?.uri) || !Number.isSafeInteger(event.playedAt) || event.playedAt < 0)) throw new Error('Invalid recent plays');
+    if (![1, 2].includes(value?.version) || !Number.isSafeInteger(value.lastSynced) || !Number.isSafeInteger(value.ignoreBefore || 0) || !Array.isArray(value.events) || value.events.length > 100000 || value.events.some(event => !spotifyTrackUri(event?.uri) || !Number.isSafeInteger(event.playedAt) || event.playedAt < 0) || (value.covered !== undefined && (!Array.isArray(value.covered) || value.covered.length > 100000 || value.covered.some(key => typeof key !== 'string' || !/^spotify:track:[A-Za-z0-9]+:[0-9]+$/.test(key))))) throw new Error('Invalid recent plays');
     return value;
   } catch { throw new Error('Could not read local recent plays. Back up the .data folder before retrying.'); }
 }
@@ -418,7 +425,8 @@ function saveRecentPlays(session, ledger) {
 function mergeRecentPlays(session, recent) {
   if (!Array.isArray(recent?.items) || recent.items.length > 50) throw new Error('Spotify returned an invalid recent-play response.');
   const ledger = readRecentPlays(session);
-  const known = new Set(ledger.events.map(event => `${event.uri}:${event.playedAt}`));
+  if (historyImports.has(spotifyCacheUserKey(session))) return ledger;
+  const known = new Set([...(ledger.covered || []), ...ledger.events.map(event => `${event.uri}:${event.playedAt}`)]);
   let changed = false;
   for (const item of recent.items) {
     const uri = item?.track?.uri;
@@ -452,7 +460,7 @@ function playCountResponse(history, ledger, records, recentUnavailable = false) 
   const recent = new Map();
   const relevant = new Set(requested.keys());
   for (const candidate of candidates.values()) if (candidate.uri) relevant.add(candidate.uri);
-  for (const event of ledger.events) if (event.playedAt > cutoff && relevant.has(event.uri)) recent.set(event.uri, (recent.get(event.uri) || 0) + 1);
+  for (const event of ledger.events) if ((ledger.version === 2 || event.playedAt > cutoff) && relevant.has(event.uri)) recent.set(event.uri, (recent.get(event.uri) || 0) + 1);
   const counts = {}; const matches = {};
   for (const record of records) {
     const candidate = candidates.get(playCountMatchKey(record.title, record.artist));
@@ -483,7 +491,7 @@ function historyQueryOptions(url) {
   if (!/^[1-9][0-9]{0,3}$/.test(rawPage) || !['plays', 'title', 'artist', 'album'].includes(sort) || !['asc', 'desc'].includes(direction) || q.length > 100) throw Object.assign(new Error('Invalid listening history filters.'), { status: 400 });
   return { page: Number(rawPage), sort, direction, q };
 }
-function historyBrowseResponse(history, { page = 1, sort = 'plays', direction = 'desc', q = '' } = {}) {
+function historyBrowseResponse(history, { page = 1, sort = 'plays', direction = 'desc', q = '' } = {}, ledger = null) {
   const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
   const tieBreak = (a, b) => collator.compare(a.title, b.title) || collator.compare(a.artist, b.artist) || collator.compare(a.uri, b.uri);
   const ranked = [...history.tracks].sort((a, b) => b.plays - a.plays || tieBreak(a, b));
@@ -498,7 +506,8 @@ function historyBrowseResponse(history, { page = 1, sort = 'plays', direction = 
   const pages = Math.max(1, Math.ceil(total / historyPageSize));
   const currentPage = Math.min(page, pages);
   const tracks = matching.slice((currentPage - 1) * historyPageSize, currentPage * historyPageSize);
-  return { imported: true, totalPlays: history.totalPlays, firstAt: history.firstAt, lastAt: history.lastAt, importedAt: history.importedAt, trackCount: history.tracks.length, topTracks, tracks, page: currentPage, perPage: historyPageSize, matches: total };
+  const recentPlays = ledger ? ledger.events.filter(event => ledger.version === 2 || event.playedAt > Date.parse(history.lastAt)).length : 0;
+  return { imported: true, totalPlays: history.totalPlays, recentPlays, combinedPlays: history.totalPlays + recentPlays, firstAt: history.firstAt, lastAt: history.lastAt, importedAt: history.importedAt, trackCount: history.tracks.length, topTracks, tracks, page: currentPage, perPage: historyPageSize, matches: total };
 }
 function saveListeningHistory(session, history) {
   const file = historyFile(session); if (!file) throw new Error('Spotify account identity is unavailable.');
@@ -507,6 +516,31 @@ function saveListeningHistory(session, history) {
   try { fs.writeFileSync(temporary, JSON.stringify(history), { encoding: 'utf8', mode: 0o600 }); fs.renameSync(temporary, file); }
   catch { throw new Error('Could not save local listening history. The previous import was kept.'); }
   finally { try { fs.unlinkSync(temporary); } catch (error) { if (error.code !== 'ENOENT') throw error; } }
+}
+function mergeListeningHistory(existing, incoming) {
+  if (!existing) return incoming;
+  const tracks = new Map(existing.tracks.map(track => [track.uri, { ...track }]));
+  for (const track of incoming.tracks) {
+    const prior = tracks.get(track.uri);
+    tracks.set(track.uri, prior ? { ...track, plays: Math.max(prior.plays, track.plays) } : track);
+  }
+  const mergedTracks = [...tracks.values()];
+  return { ...incoming, totalPlays: mergedTracks.reduce((total, track) => total + track.plays, 0), firstAt: Date.parse(existing.firstAt) < Date.parse(incoming.firstAt) ? existing.firstAt : incoming.firstAt, lastAt: Date.parse(existing.lastAt) > Date.parse(incoming.lastAt) ? existing.lastAt : incoming.lastAt, tracks: mergedTracks };
+}
+function reconcileRecentLedger(existingHistory, incomingHistory, ledger, matchedKeys) {
+  const priorCounts = new Map((existingHistory?.tracks || []).map(track => [track.uri, track.plays]));
+  const absorption = new Map(incomingHistory.tracks.map(track => [track.uri, Math.max(0, track.plays - (priorCounts.get(track.uri) || 0))]));
+  const matched = new Set(matchedKeys);
+  const legacyCutoff = existingHistory ? Date.parse(existingHistory.lastAt) : -1;
+  const events = []; const covered = new Set(ledger.covered || []);
+  for (const event of ledger.events) {
+    if (ledger.version === 1 && event.playedAt <= legacyCutoff) { covered.add(`${event.uri}:${event.playedAt}`); continue; }
+    const key = `${event.uri}:${event.playedAt}`; const available = absorption.get(event.uri) || 0;
+    if (matched.has(key) && available > 0) { absorption.set(event.uri, available - 1); covered.add(key); continue; }
+    events.push(event);
+  }
+  if (covered.size > 100000) throw new Error('Local recent-play deduplication storage is full. Back up the .data folder before retrying.');
+  return { ...ledger, version: 2, events, covered: [...covered] };
 }
 async function receiveHistoryArchive(request, target) {
   const length = Number(request.headers['content-length']);
@@ -523,10 +557,10 @@ async function receiveHistoryArchive(request, target) {
   } finally { await file.close(); }
   if (size < 4) { const error = new Error('Select the ZIP file from Spotify, not an individual document.'); error.status = 400; throw error; }
 }
-function parseHistoryArchive(archivePath, outputPath) {
+function parseHistoryArchive(archivePath, outputPath, ledgerPath) {
   return new Promise((resolve, reject) => {
     if (process.platform !== 'win32') { const error = new Error('Spotify history import currently requires Windows.'); error.status = 503; reject(error); return; }
-    const parser = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', path.join(root, 'scripts', 'Parse-Spotify-History.ps1'), '-ArchivePath', archivePath, '-OutputPath', outputPath], { windowsHide: true, stdio: 'ignore', env: { SystemRoot: process.env.SystemRoot, WINDIR: process.env.WINDIR, TEMP: process.env.TEMP, TMP: process.env.TMP, PATH: process.env.PATH } });
+    const parser = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', path.join(root, 'scripts', 'Parse-Spotify-History.ps1'), '-ArchivePath', archivePath, '-OutputPath', outputPath, ...(ledgerPath ? ['-LedgerPath', ledgerPath] : [])], { windowsHide: true, stdio: 'ignore', env: { SystemRoot: process.env.SystemRoot, WINDIR: process.env.WINDIR, TEMP: process.env.TEMP, TMP: process.env.TMP, PATH: process.env.PATH } });
     let settled = false;
     let timedOut = false;
     const timer = setTimeout(() => { timedOut = true; parser.kill(); }, 300000);
@@ -547,7 +581,8 @@ function validateHistorySummary(summary, accountId, confirmedAccount) {
     tracks.push({ uri: track.uri, title: track.title, artist: track.artist, album: track.album, plays: track.plays });
   }
   if (counted !== summary.totalPlays) throw Object.assign(new Error('Spotify history play counts did not match.'), { status: 400 });
-  return { version: 1, totalPlays: summary.totalPlays, firstAt: summary.firstAt, lastAt: summary.lastAt, importedAt: Date.now(), tracks };
+  if (summary.matchedRecentEvents !== undefined && (!Array.isArray(summary.matchedRecentEvents) || summary.matchedRecentEvents.length > 100000 || summary.matchedRecentEvents.some(key => typeof key !== 'string' || !/^spotify:track:[A-Za-z0-9]+:[0-9]{1,16}$/.test(key)))) throw Object.assign(new Error('Spotify history contains invalid recent-play matches.'), { status: 400 });
+  return { history: { version: 1, totalPlays: summary.totalPlays, firstAt: summary.firstAt, lastAt: summary.lastAt, importedAt: Date.now(), tracks }, matchedRecentEvents: summary.matchedRecentEvents || [] };
 }
 function cookies(request) { const header = request.headers.cookie; if (typeof header !== 'string' || header.length > 4096) return {}; return Object.fromEntries(header.split(';').map(pair => { const i = pair.indexOf('='); return i > 0 ? [pair.slice(0, i).trim(), pair.slice(i + 1).trim()] : null; }).filter(Boolean)); }
 function sessionCookie(id) { return `rcrd_session=${id}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${Math.floor(config.sessionMaxAgeSeconds)}`; }
@@ -579,9 +614,29 @@ function securityHeaders(headers = {}) {
 }
 function send(response, status, body, headers = {}) { response.writeHead(status, securityHeaders({ 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', ...headers })); response.end(JSON.stringify(body)); }
 function redirect(response, location, headers = {}) { response.writeHead(302, securityHeaders({ Location: location, ...headers })); response.end(); }
-function spotifyScopes(includeTop = false) { return ['user-read-currently-playing', 'user-read-playback-state', 'user-modify-playback-state', 'user-library-read', 'user-library-modify', 'user-read-recently-played', 'playlist-read-private', 'playlist-read-collaborative', 'streaming', 'user-read-private', ...(includeTop ? ['user-top-read'] : [])].join(' '); }
+function spotifyScopes(includeTop = false) { return ['user-read-currently-playing', 'user-read-playback-state', 'user-modify-playback-state', 'user-library-read', 'user-library-modify', 'user-read-recently-played', 'playlist-read-private', 'playlist-read-collaborative', 'playlist-modify-private', 'streaming', 'user-read-private', ...(includeTop ? ['user-top-read'] : [])].join(' '); }
 function spotifyHasScope(session, scope) { return typeof session?.spotify?.scope === 'string' && session.spotify.scope.split(/\s+/).includes(scope); }
 function spotifyTrackUri(uri) { return typeof uri === 'string' && uri.length <= 100 && /^spotify:track:[A-Za-z0-9]+$/.test(uri); }
+async function createPrivateSpotifyPlaylist(session, request, name, uris = [], description = '') {
+  const profile = await spotifyProfile(session); const account = session.spotify;
+  if (!spotifyHasScope(session, 'playlist-modify-private')) throw Object.assign(new Error('Reconnect Spotify to allow saving private playlists.'), { status: 403 });
+  const sameAccount = () => sessionFor(request) === session && session.spotify === account && session.spotify.userId === profile.id;
+  if (!sameAccount()) throw Object.assign(new Error('Spotify account changed. Try again.'), { status: 409 });
+  const playlist = await spotifyApi(session, '/me/playlists', { method: 'POST', expectJson: true, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, public: false, description }) });
+  if (!/^[A-Za-z0-9]+$/.test(playlist?.id || '')) throw Object.assign(new Error('Spotify did not confirm the new playlist.'), { status: 502 });
+  if (!sameAccount()) throw Object.assign(new Error('Spotify account changed after playlist creation. Check your Spotify playlists.'), { status: 409 });
+  let songsAdded = true;
+  if (uris.length) {
+    try { await spotifyApi(session, `/playlists/${enc(playlist.id)}/items`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ uris }) }); }
+    catch { songsAdded = false; }
+    if (!sameAccount()) throw Object.assign(new Error('Spotify account changed while saving the playlist.'), { status: 409 });
+  }
+  session.spotify.cache?.delete('playlists');
+  let cacheWarning = false;
+  try { clearSpotifyDiskEntry(session, 'playlists'); }
+  catch { cacheWarning = true; }
+  return { id: playlist.id, name, url: `https://open.spotify.com/playlist/${playlist.id}`, ...(songsAdded ? {} : { songsAdded: false }), ...(cacheWarning ? { cacheWarning: 'Playlist saved, but the local playlist list may need a restart to refresh.' } : {}) };
+}
 function spotifyLibraryVersion(session) { return session.spotify.libraryVersion || 0; }
 function spotifyLibraryChanged(session, expectedVersion) {
   if (spotifyLibraryVersion(session) === expectedVersion) return;
@@ -613,7 +668,8 @@ async function spotifyApi(session, endpoint, options = {}) {
   const run = async () => {
     const blockedFor = Math.ceil(((session.spotify.rateLimitedUntil || 0) - Date.now()) / 1000);
     if (blockedFor > 0) { const error = new Error(`Spotify request limit reached. Try again in ${blockedFor} seconds.`); error.status = 429; error.retryAfter = blockedFor; throw error; }
-    const { response, text } = await providerResponse(`https://api.spotify.com/v1${endpoint}`, { ...options, headers: { Authorization: `Bearer ${accessToken}`, ...(options.headers || {}) } });
+    const { expectJson, ...requestOptions } = options;
+    const { response, text } = await providerResponse(`https://api.spotify.com/v1${endpoint}`, { ...requestOptions, headers: { Authorization: `Bearer ${accessToken}`, ...(options.headers || {}) } });
     if (!response.ok) {
       let payload = null; try { payload = JSON.parse(text); } catch {}
       const reason = payload?.error?.reason || '';
@@ -630,7 +686,7 @@ async function spotifyApi(session, endpoint, options = {}) {
       const error = new Error(message); error.status = response.status; error.retryAfter = retryAfter || null; error.reason = reason; throw error;
     }
     if (session.spotify.rateLimitedUntil || session.spotify.rateLimitBackoffMs) { session.spotify.rateLimitedUntil = 0; session.spotify.rateLimitBackoffMs = 0; savePersistentSessions(); }
-    if (response.status === 204 || String(options.method || 'GET').toUpperCase() !== 'GET') return null;
+    if (response.status === 204 || String(options.method || 'GET').toUpperCase() !== 'GET' && !expectJson) return null;
     if (!text) return null;
     try { return JSON.parse(text); } catch { const error = new Error('Spotify returned an invalid JSON response.'); error.status = 502; throw error; }
   };
@@ -981,6 +1037,12 @@ async function spotifyPages(session, endpoint, pageSize = 50, checkpointKey = ''
   return items;
 }
 async function discogsIdentity(session) { const identity = await discogsJson('https://api.discogs.com/oauth/identity', { headers: { Authorization: oauthHeader({ token: session.accessToken, tokenSecret: session.accessSecret }) } }); if (typeof identity.username !== 'string' || !identity.username) { const error = new Error('Discogs returned an invalid account profile.'); error.status = 502; throw error; } return identity; }
+function collectionNotesFile(identity) { const user = Number.isSafeInteger(identity.id) && identity.id > 0 ? `id:${identity.id}` : `username:${identity.username.normalize('NFKC').toLocaleLowerCase()}`; return path.join(collectionNotesRoot, `${crypto.createHash('sha256').update(user).digest('hex')}.json`); }
+function readCollectionNotes(identity) {
+  let raw; try { const file = collectionNotesFile(identity); if (fs.statSync(file).size > 16 * 1024 * 1024) throw new Error('Invalid notes'); raw = fs.readFileSync(file, 'utf8'); } catch (error) { if (error.code === 'ENOENT') return {}; throw new Error('Could not read collection notes.'); }
+  try { const notes = JSON.parse(raw); if (!notes || typeof notes !== 'object' || Array.isArray(notes) || Object.keys(notes).length > 10000 || Object.entries(notes).some(([key, value]) => !/^[1-9][0-9]*$/.test(key) || !value || typeof value !== 'object' || ['condition', 'location', 'pricePaid', 'note'].some(field => typeof value[field] !== 'string' || value[field].length > (field === 'note' ? 1000 : 100)))) throw new Error('Invalid notes'); return notes; } catch { throw new Error('Could not read collection notes.'); }
+}
+function saveCollectionNotes(identity, notes) { const file = collectionNotesFile(identity); fs.mkdirSync(collectionNotesRoot, { recursive: true, mode: 0o700 }); const temporary = `${file}.${random()}.tmp`; try { fs.writeFileSync(temporary, JSON.stringify(notes), { encoding: 'utf8', mode: 0o600 }); fs.renameSync(temporary, file); } catch { throw new Error('Could not save collection notes.'); } finally { try { fs.unlinkSync(temporary); } catch (error) { if (error.code !== 'ENOENT') throw error; } } }
 function discogsReleaseSummary(release) {
   const short = value => String(value == null ? '' : value).slice(0, 180);
   const labels = Array.isArray(release.labels) ? release.labels.slice(0, 5).map(item => ({ name: short(item?.name), catalogNumber: short(item?.catno) })) : [];
@@ -1217,7 +1279,13 @@ async function handle(request, response) {
       return redirect(response, '/?spotify=connected');
     }
     if (request.method === 'GET' && url.pathname === '/api/spotify/status') {
-      const session = sessionFor(request); const spotify = session?.spotify; const now = Date.now(); return send(response, 200, { configured: Boolean(config.spotify), connected: Boolean(spotify?.refreshToken), canStream: Boolean(spotify?.refreshToken && spotifyHasScope(session, 'streaming')), canModifyLibrary: Boolean(spotify?.refreshToken && spotifyHasScope(session, 'user-library-modify')), canReadTop: Boolean(spotify?.refreshToken && spotifyHasScope(session, 'user-top-read')), accessExpiresAt: spotify?.expiresAt || null, refreshDueAt: spotify?.refreshDueAt || null, daysRemaining: spotify?.refreshDueAt ? Math.max(0, Math.ceil((spotify.refreshDueAt - now) / 86400000)) : null, needsReauthorization: Boolean(spotify?.refreshDueAt && spotify.refreshDueAt <= now) });
+      const session = sessionFor(request); const spotify = session?.spotify; const now = Date.now(); const daysRemaining = spotify?.refreshDueAt ? Math.max(0, Math.ceil((spotify.refreshDueAt - now) / 86400000)) : null; const renewalState = spotify?.refreshDueAt && spotify.refreshDueAt <= now ? 'due' : Number.isFinite(daysRemaining) && daysRemaining <= 14 ? 'warning' : 'clear';
+      if (spotify?.refreshToken && spotify.renewalNoticeState !== renewalState) { if (renewalState === 'warning' || renewalState === 'due') logNotification('spotify-renewal-shown', { state: renewalState, daysRemaining }); else if (spotify.renewalNoticeState === 'warning' || spotify.renewalNoticeState === 'due') logNotification('spotify-renewal-resolved'); spotify.renewalNoticeState = renewalState; }
+      return send(response, 200, { configured: Boolean(config.spotify), connected: Boolean(spotify?.refreshToken), accountMarker: typeof spotify?.userId === 'string' && spotify.userId ? crypto.createHash('sha256').update(spotify.userId).digest('hex').slice(0, 16) : null, canStream: Boolean(spotify?.refreshToken && spotifyHasScope(session, 'streaming')), canModifyLibrary: Boolean(spotify?.refreshToken && spotifyHasScope(session, 'user-library-modify')), canReadTop: Boolean(spotify?.refreshToken && spotifyHasScope(session, 'user-top-read')), accessExpiresAt: spotify?.expiresAt || null, refreshDueAt: spotify?.refreshDueAt || null, daysRemaining, needsReauthorization: renewalState === 'due' });
+    }
+    if (request.method === 'POST' && url.pathname === '/api/notifications/spotify-renewal/dismiss') {
+      const session = sessionFor(request); if (!session?.spotify?.refreshToken) return send(response, 401, { error: 'Connect Spotify first.' });
+      logNotification('spotify-renewal-dismissed'); return send(response, 200, { ok: true });
     }
     if (request.method === 'GET' && url.pathname === '/api/spotify/token') {
       const session = sessionFor(request); if (!config.spotify || !session?.spotify?.refreshToken) return send(response, 401, { error: 'Connect Spotify first.' });
@@ -1253,13 +1321,14 @@ async function handle(request, response) {
       if (request.method === 'GET') {
         const options = historyQueryOptions(url);
         const history = readListeningHistory(session);
-        const recentPlaysStored = readRecentPlays(session).events.length > 0;
-        return send(response, 200, history ? { ...historyBrowseResponse(history, options), recentPlaysStored } : { imported: false, recentPlaysStored });
+        const ledger = readRecentPlays(session);
+        const recentPlaysStored = ledger.events.length > 0;
+        return send(response, 200, history ? { ...historyBrowseResponse(history, options, ledger), recentPlaysStored } : { imported: false, recentPlaysStored });
       }
       if (historyImports.has(accountKey)) return send(response, 409, { error: 'A history import is already running for this account.' });
       if (request.method === 'DELETE') {
         try { fs.unlinkSync(historyFile(session)); } catch (error) { if (error.code !== 'ENOENT') throw new Error('Could not delete local listening history.'); }
-        const now = Date.now(); saveRecentPlays(session, { version: 1, lastSynced: now, ignoreBefore: now, events: [] });
+        const now = Date.now(); saveRecentPlays(session, { version: 2, lastSynced: now, ignoreBefore: now, events: [] });
         return send(response, 200, { ok: true });
       }
       if (!/^application\/(zip|octet-stream)(?:\s*;|$)/i.test(String(request.headers['content-type'] || ''))) return send(response, 415, { error: 'Select a Spotify ZIP file.' });
@@ -1270,15 +1339,25 @@ async function handle(request, response) {
       try {
         const archive = path.join(temporary, 'spotify.zip');
         const output = path.join(temporary, 'summary.json');
+        const ledgerInput = path.join(temporary, 'recent-ledger.json');
+        const ledgerAtStart = readRecentPlays(session);
+        fs.writeFileSync(ledgerInput, JSON.stringify(ledgerAtStart.events), { encoding: 'utf8', mode: 0o600 });
         await receiveHistoryArchive(request, archive);
-        await parseHistoryArchive(archive, output);
+        await parseHistoryArchive(archive, output, ledgerInput);
         if (fs.statSync(output).size > 32 * 1024 * 1024) throw Object.assign(new Error('Spotify history contains too many tracks.'), { status: 413 });
         let summary;
         try { summary = JSON.parse(fs.readFileSync(output, 'utf8')); } catch { throw Object.assign(new Error('Spotify history produced an invalid summary.'), { status: 400 }); }
         if (sessionFor(request) !== session || session.spotify?.userId !== profile.id || spotifyCacheUserKey(session) !== accountKey) return send(response, 409, { error: 'Spotify account changed during import. Reconnect and try again.' });
-        const history = validateHistorySummary(summary, profile.id, request.headers['x-rcrd-history-account-confirmed'] === '1');
+        const validated = validateHistorySummary(summary, profile.id, request.headers['x-rcrd-history-account-confirmed'] === '1');
+        const snapshotKeys = new Set(ledgerAtStart.events.map(event => `${event.uri}:${event.playedAt}`));
+        if (validated.matchedRecentEvents.some(key => !snapshotKeys.has(key))) throw Object.assign(new Error('Spotify history recent-play matches did not match the local ledger.'), { status: 400 });
+        const currentLedger = readRecentPlays(session);
+        const existingHistory = readListeningHistory(session);
+        const reconciledLedger = reconcileRecentLedger(existingHistory, validated.history, currentLedger, validated.matchedRecentEvents);
+        const history = mergeListeningHistory(existingHistory, validated.history);
         saveListeningHistory(session, history);
-        return send(response, 200, historyBrowseResponse(history));
+        saveRecentPlays(session, reconciledLedger);
+        return send(response, 200, { ...historyBrowseResponse(history, {}, reconciledLedger), addedImportedPlays: history.totalPlays - (existingHistory?.totalPlays || 0) });
       } finally {
         historyImports.delete(accountKey);
         const resolved = path.resolve(temporary);
@@ -1404,6 +1483,52 @@ async function handle(request, response) {
         clearSpotifyCheckpoint(session, 'checkpoint:playlists');
         return send(response, 200, playlists);
       } catch (error) { return sendSpotifyError(response, error, 502, [401]); }
+    }
+    if (request.method === 'POST' && url.pathname === '/api/spotify/playlists') {
+      const session = sessionFor(request); if (!session?.spotify?.refreshToken) return send(response, 401, { error: 'Connect Spotify first.' });
+      try {
+        const body = await readJsonBody(request, 12000);
+        const name = typeof body.name === 'string' ? body.name.trim() : '';
+        if (!name || name.length > 100 || /[\u0000-\u001f\u007f]/.test(name)) return send(response, 400, { error: 'Enter a playlist name of 1–100 characters.' });
+        const uris = body.uris;
+        if (!Array.isArray(uris) || uris.length < 1 || uris.length > 100 || uris.some(uri => !spotifyTrackUri(uri)) || new Set(uris).size !== uris.length) return send(response, 400, { error: 'Choose 1–100 unique Spotify songs for the playlist.' });
+        return send(response, 200, await createPrivateSpotifyPlaylist(session, request, name, uris));
+      } catch (error) { return sendSpotifyError(response, error, 502, [400, 401, 403, 409]); }
+    }
+    if (request.method === 'POST' && url.pathname === '/api/spotify/mix-playlist') {
+      const session = sessionFor(request); if (!session?.spotify?.refreshToken) return send(response, 401, { error: 'Connect Spotify first.' });
+      try {
+        const body = await readJsonBody(request, 12000);
+        const name = typeof body.name === 'string' ? body.name.trim() : '';
+        const uris = body.uris;
+        if (!name || name.length > 100 || /[\u0000-\u001f\u007f]/.test(name) || !Array.isArray(uris) || uris.length < 10 || uris.length > 100 || uris.some(uri => !spotifyTrackUri(uri)) || new Set(uris).size !== uris.length) return send(response, 400, { error: 'Provide a playlist name and 10–100 unique Spotify tracks.' });
+        return send(response, 200, await createPrivateSpotifyPlaylist(session, request, name, uris, 'Created from an RCRD Mix.'));
+      } catch (error) { return sendSpotifyError(response, error, 502, [400, 401, 403, 409]); }
+    }
+    if (request.method === 'POST' && url.pathname === '/api/spotify/playlist/items') {
+      const session = sessionFor(request); if (!session?.spotify?.refreshToken) return send(response, 401, { error: 'Connect Spotify first.' });
+      try {
+        const body = await readJsonBody(request, 12000);
+        const id = body.id; const uris = body.uris;
+        if (typeof id !== 'string' || !/^[A-Za-z0-9]+$/.test(id) || !Array.isArray(uris) || uris.length < 1 || uris.length > 100 || uris.some(uri => !spotifyTrackUri(uri)) || new Set(uris).size !== uris.length) return send(response, 400, { error: 'Choose a valid playlist and 1–100 unique Spotify songs.' });
+        const profile = await spotifyProfile(session); const account = session.spotify;
+        if (!spotifyHasScope(session, 'playlist-modify-private')) return send(response, 403, { error: 'Reconnect Spotify to allow editing private playlists.' });
+        const sameAccount = () => sessionFor(request) === session && session.spotify === account && account.userId === profile.id;
+        if (!sameAccount()) return send(response, 409, { error: 'Spotify account changed. Try again.' });
+        const playlist = await spotifyApi(session, `/playlists/${enc(id)}`);
+        if (!sameAccount()) return send(response, 409, { error: 'Spotify account changed. Try again.' });
+        if (playlist?.owner?.id !== profile.id) return send(response, 403, { error: 'Only playlists owned by this Spotify account can be edited here.' });
+        const existing = await spotifyPages(session, `/playlists/${enc(id)}/items`, 50, `checkpoint:playlist-add:${id}`);
+        if (!sameAccount()) return send(response, 409, { error: 'Spotify account changed. Try again.' });
+        clearSpotifyCheckpoint(session, `checkpoint:playlist-add:${id}`);
+        const present = new Set(existing.map(entry => (entry.item || entry.track)?.uri));
+        const missing = uris.filter(uri => !present.has(uri));
+        if (missing.length) await spotifyApi(session, `/playlists/${enc(id)}/items`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ uris: missing }) });
+        if (!sameAccount()) return send(response, 409, { error: 'Spotify account changed while adding songs.' });
+        account.cache?.delete(`playlist:${id}`);account.cache?.delete('playlists');
+        clearSpotifyDiskEntry(session, `playlist:${id}`);clearSpotifyDiskEntry(session, 'playlists');
+        return send(response, 200, { ok: true, added: missing.length });
+      } catch (error) { return sendSpotifyError(response, error, 502, [400, 401, 403, 404, 409]); }
     }
     if (['GET', 'POST'].includes(request.method) && url.pathname === '/api/spotify/playlist') {
       const session = sessionFor(request); if (!session?.spotify?.refreshToken) return send(response, 401, { error: 'Connect Spotify first.' });
@@ -1551,11 +1676,33 @@ async function handle(request, response) {
     if (request.method === 'GET' && (url.pathname === '/api/collection' || url.pathname === '/api/wantlist')) {
       const session = sessionFor(request); if (!session?.accessToken) return send(response, 401, { error: 'Connect Discogs first.' });
       try {
+        const accountToken = session.accessToken;
         const identity = await discogsIdentity(session);
         const endpoint = url.pathname === '/api/collection' ? `https://api.discogs.com/users/${enc(identity.username)}/collection/folders/0/releases` : `https://api.discogs.com/users/${enc(identity.username)}/wants`;
         const releases = await discogsPages(session, endpoint);
-        return send(response, 200, { username: identity.username, releases });
+        if (sessionFor(request) !== session || session.accessToken !== accountToken) return send(response, 409, { error: 'Discogs account changed. Try again.' });
+        const notes = url.pathname === '/api/collection' ? readCollectionNotes(identity) : {};
+        const owned = releases.map(entry => { const copy = notes[String(entry.instance_id)]; return copy ? { ...entry, rcrdNotes: copy } : entry; });
+        return send(response, 200, { username: identity.username, releases: owned });
       } catch (error) { if (error.status === 429) throw error; return send(response, 502, { error: error.message }); }
+    }
+    if (request.method === 'PUT' && url.pathname === '/api/collection/notes') {
+      const session = sessionFor(request); if (!session?.accessToken) return send(response, 401, { error: 'Connect Discogs first.' });
+      const accountToken = session.accessToken;
+      const body = await readJsonBody(request, 4000);
+      const instanceId = Number(body.instanceId);
+      if (!Number.isSafeInteger(instanceId) || instanceId < 1 || String(instanceId) !== String(body.instanceId)) return send(response, 400, { error: 'A valid Discogs collection copy is required.' });
+      const fields = ['condition', 'location', 'pricePaid', 'note']; const notes = {};
+      for (const field of fields) { if (typeof body[field] !== 'string' || body[field].length > (field === 'note' ? 1000 : 100) || /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/.test(body[field])) return send(response, 400, { error: 'Invalid collection note.' }); notes[field] = body[field].trim(); }
+      const identity = await discogsIdentity(session);
+      const releases = await discogsPages(session, `https://api.discogs.com/users/${enc(identity.username)}/collection/folders/0/releases`);
+      if (sessionFor(request) !== session || session.accessToken !== accountToken) return send(response, 409, { error: 'Discogs account changed. Try again.' });
+      if (!releases.some(entry => entry.instance_id === instanceId)) return send(response, 404, { error: 'That copy is not in your Discogs collection.' });
+      const saved = readCollectionNotes(identity);
+      if (fields.some(field => notes[field])) saved[String(instanceId)] = notes; else delete saved[String(instanceId)];
+      if (Object.keys(saved).length > 10000) return send(response, 413, { error: 'Local collection notes have reached their limit.' });
+      saveCollectionNotes(identity, saved);
+      return send(response, 200, { instanceId, notes });
     }
     if (request.method === 'GET' && url.pathname === '/api/search') {
       const query = url.searchParams.get('q')?.trim() || ''; if (query.length > 200) return send(response, 400, { error: 'Discogs search query is too long.' });

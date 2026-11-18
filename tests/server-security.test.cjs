@@ -32,6 +32,23 @@ test('update check rejects malformed release metadata and does not expose it', (
   assert.doesNotMatch(response.body, /do-not-return|example\.test/);
 }));
 
+test('Spotify renewal notifications log only lifecycle events without account credentials', () => fixture(async ({ request, runtime, testSessions }) => {
+  const cookie = { Cookie: `rcrd_session=${sessionId}` };
+  const spotify = testSessions.get(sessionId).spotify;
+  spotify.refreshDueAt = Date.now() + (10 * 86400000);
+  let status = JSON.parse((await request('/api/spotify/status', { headers: cookie })).body);
+  assert.equal(status.daysRemaining, 10);
+  await request('/api/spotify/status', { headers: cookie });
+  const dismissed = await request('/api/notifications/spotify-renewal/dismiss', { method: 'POST', headers: { ...cookie, 'X-RCRD-Request': '1' } });
+  assert.equal(dismissed.status, 200);
+  spotify.refreshDueAt = Date.now() + (30 * 86400000);
+  status = JSON.parse((await request('/api/spotify/status', { headers: cookie })).body);
+  assert.equal(status.daysRemaining, 30);
+  const entries = fs.readFileSync(path.join(runtime, 'notifications.log'), 'utf8').trim().split('\n').map(JSON.parse);
+  assert.deepEqual(entries.map(entry => entry.event), ['spotify-renewal-shown', 'spotify-renewal-dismissed', 'spotify-renewal-resolved']);
+  assert.doesNotMatch(JSON.stringify(entries), /synthetic-refresh|synthetic-user|accessToken|refreshToken/);
+}));
+
 function syntheticSessions(key, spotifyScope = '', sessionExpiresAt = null) {
   const iv = crypto.randomBytes(12);
   const cipher = crypto.createCipheriv('aes-256-gcm', key, iv);
@@ -92,7 +109,9 @@ async function fixture(run, { spotifyCacheUsers = {}, spotifyScope = '', spotify
         try {
           const archive = args[args.indexOf('-ArchivePath') + 1];
           const output = args[args.indexOf('-OutputPath') + 1];
-          const summary = state.historyParser(fs.readFileSync(archive));
+          const ledgerIndex = args.indexOf('-LedgerPath');
+          const ledger = ledgerIndex === -1 ? [] : JSON.parse(fs.readFileSync(args[ledgerIndex + 1], 'utf8'));
+          const summary = state.historyParser(fs.readFileSync(archive), ledger);
           if (!summary) child.emit('exit', 1);
           else { fs.writeFileSync(output, JSON.stringify(summary)); child.emit('exit', 0); }
         } catch { child.emit('exit', 1); }
@@ -268,18 +287,18 @@ test('Spotify history import is local, account-bound, repeatable, and removable'
   const bulk = await request('/api/spotify/history', { method: 'POST', headers: mutation, body: good });
   assert.equal(bulk.status, 200, bulk.body);
   const first = JSON.parse(bulk.body);
-  assert.equal(first.trackCount, 30);
-  assert.equal(first.matches, 30);
+  assert.equal(first.trackCount, 31);
+  assert.equal(first.matches, 31);
   assert.equal(first.tracks.length, 12);
   assert.equal(first.tracks[0].plays, 30);
   assert.equal(first.topTracks[0].plays, 30);
   const second = JSON.parse((await request('/api/spotify/history?page=2&sort=plays&direction=asc', { headers: cookie })).body);
   assert.equal(second.page, 2);
   assert.equal(second.tracks.length, 12);
-  assert.equal(second.tracks[0].plays, 13);
+  assert.equal(second.tracks[0].plays, 12);
   const last = JSON.parse((await request('/api/spotify/history?page=9999', { headers: cookie })).body);
   assert.equal(last.page, 3);
-  assert.equal(last.tracks.length, 6);
+  assert.equal(last.tracks.length, 7);
   assert.equal(last.tracks.at(-1).plays, 1);
   const searched = JSON.parse((await request('/api/spotify/history?q=Song%202&sort=title&direction=asc', { headers: cookie })).body);
   assert.equal(searched.matches, 11);
@@ -289,6 +308,99 @@ test('Spotify history import is local, account-bound, repeatable, and removable'
   assert.equal((await request('/api/spotify/history?direction=sideways', { headers: cookie })).status, 400);
   assert.equal((await request('/api/spotify/history', { method: 'DELETE', headers: { ...mutation, 'Content-Type': 'application/json' } })).status, 200);
   assert.equal(JSON.parse((await request('/api/spotify/history', { headers: cookie })).body).imported, false);
+}));
+
+test('history imports preserve RCRD plays, deduplicate overlap, and stay monotonic across reimports', () => fixture(async ({ request, state, runtime, port }) => {
+  const uri = 'spotify:track:mergedTrack';
+  const userKey = crypto.createHash('sha256').update('synthetic-user').digest('hex');
+  const historyRoot = path.join(runtime, 'listening-history');
+  fs.mkdirSync(historyRoot);
+  const firstLocal = Date.parse('2025-02-01T12:00:00Z');
+  const secondLocal = Date.parse('2025-03-01T12:00:00Z');
+  fs.writeFileSync(path.join(historyRoot, `${userKey}.json`), JSON.stringify({ version: 1, totalPlays: 5, firstAt: '2024-01-01T00:00:00Z', lastAt: '2025-01-01T00:00:00Z', importedAt: Date.now(), tracks: [{ uri, title: 'Merged song', artist: 'Artist', album: 'Album', plays: 5 }] }));
+  fs.writeFileSync(path.join(historyRoot, `${userKey}.recent.json`), JSON.stringify({ version: 1, lastSynced: Date.now(), ignoreBefore: 0, events: [{ uri, playedAt: firstLocal }, { uri, playedAt: secondLocal }] }));
+  let recentItems = [];
+  state.providerFetch = async url => {
+    const pathname = new URL(url).pathname;
+    if (pathname.endsWith('/api/token')) return providerJson({ access_token: 'synthetic-access', expires_in: 3600 });
+    if (pathname === '/v1/me') return providerJson({ id: 'synthetic-user' });
+    if (pathname === '/v1/me/player/recently-played') return providerJson({ items: recentItems });
+    throw new Error('Unexpected provider request');
+  };
+  state.historyParser = (archive, ledger) => {
+    const kind = archive.toString('utf8');
+    const definitions = {
+      newer: { plays: 6, firstAt: '2024-01-01T00:00:00Z', lastAt: '2025-02-01T12:00:00Z', included: new Set([firstLocal]) },
+      older: { plays: 4, firstAt: '2024-06-01T00:00:00Z', lastAt: '2024-12-01T00:00:00Z', included: new Set([secondLocal]) },
+      newest: { plays: 7, firstAt: '2024-01-01T00:00:00Z', lastAt: '2025-03-01T12:00:00Z', included: new Set([firstLocal, secondLocal]) }
+    };
+    const item = definitions[kind];
+    return { version: 1, username: 'synthetic-user', totalPlays: item.plays, firstAt: item.firstAt, lastAt: item.lastAt, tracks: [{ uri, title: 'Merged song', artist: 'Artist', album: 'Album', plays: item.plays }], matchedRecentEvents: ledger.filter(event => item.included.has(event.playedAt)).map(event => `${event.uri}:${event.playedAt}`) };
+  };
+  const cookie = { Cookie: `rcrd_session=${sessionId}` };
+  const mutation = { ...cookie, Origin: `http://127.0.0.1:${port}`, 'X-RCRD-Request': '1', 'Content-Type': 'application/zip' };
+  const importKind = kind => request('/api/spotify/history', { method: 'POST', headers: mutation, body: Buffer.from(kind) });
+  const count = async () => JSON.parse((await request(`/api/spotify/play-counts?uri=${encodeURIComponent(uri)}`, { headers: cookie })).body).counts[uri];
+  assert.equal((await importKind('newer')).status, 200);
+  assert.equal(await count(), 7, 'one imported overlap is removed while the unmatched RCRD play remains');
+  recentItems = [{ played_at: new Date(firstLocal).toISOString(), track: { uri } }];
+  assert.equal((await request('/api/spotify/recent', { method: 'POST', headers: { ...cookie, 'X-RCRD-Request': '1' } })).status, 200);
+  assert.equal(await count(), 7, 'a later Spotify recent-play sync cannot re-add an absorbed import event');
+  assert.equal((await importKind('newer')).status, 200);
+  assert.equal(await count(), 7, 'reimporting the same ZIP is idempotent');
+  assert.equal((await importKind('older')).status, 200);
+  assert.equal(await count(), 7, 'an older import cannot absorb a matched RCRD event without a corresponding imported-count increase');
+  assert.equal((await importKind('newest')).status, 200);
+  assert.equal(await count(), 7, 'a later ZIP absorbs the remaining RCRD event without double counting it');
+  const ledger = JSON.parse(fs.readFileSync(path.join(historyRoot, `${userKey}.recent.json`), 'utf8'));
+  assert.equal(ledger.version, 2);
+  assert.deepEqual(ledger.events, []);
+}));
+
+test('listening history storage stays isolated when the authenticated Spotify user changes', () => fixture(async ({ request, state, runtime, testSessions }) => {
+  const historyRoot = path.join(runtime, 'listening-history');
+  fs.mkdirSync(historyRoot);
+  const historyFor = (uri, plays) => ({ version: 1, totalPlays: plays, firstAt: '2025-01-01T00:00:00Z', lastAt: '2025-01-02T00:00:00Z', importedAt: Date.now(), tracks: [{ uri, title: uri, artist: 'Artist', album: 'Album', plays }] });
+  const firstId = 'synthetic-user'; const secondId = 'different-user';
+  const firstFile = path.join(historyRoot, `${crypto.createHash('sha256').update(firstId).digest('hex')}.json`);
+  const secondFile = path.join(historyRoot, `${crypto.createHash('sha256').update(secondId).digest('hex')}.json`);
+  fs.writeFileSync(firstFile, JSON.stringify(historyFor('spotify:track:firstUser', 5)));
+  fs.writeFileSync(secondFile, JSON.stringify(historyFor('spotify:track:secondUser', 9)));
+  state.providerFetch = async url => {
+    const pathname = new URL(url).pathname;
+    if (pathname.endsWith('/api/token')) return providerJson({ access_token: 'synthetic-access', expires_in: 3600 });
+    if (pathname === '/v1/me') return providerJson({ id: testSessions.get(sessionId).spotify.userId });
+    throw new Error('Unexpected provider request');
+  };
+  const cookie = { Cookie: `rcrd_session=${sessionId}` };
+  assert.equal(JSON.parse((await request('/api/spotify/history', { headers: cookie })).body).totalPlays, 5);
+  const spotify = testSessions.get(sessionId).spotify; spotify.userId = secondId; spotify.cache = new Map(); spotify.accessToken = null; spotify.expiresAt = 0;
+  assert.equal(JSON.parse((await request('/api/spotify/history', { headers: cookie })).body).totalPlays, 9);
+  assert.equal(JSON.parse(fs.readFileSync(firstFile, 'utf8')).totalPlays, 5, 'switching accounts does not delete the previous user\'s persisted data');
+}));
+
+test('an account change during history parsing cannot commit or cross-merge data', () => fixture(async ({ request, state, runtime, port, testSessions }) => {
+  const firstId = 'synthetic-user'; const secondId = 'different-user';
+  const historyRoot = path.join(runtime, 'listening-history'); fs.mkdirSync(historyRoot);
+  const firstFile = path.join(historyRoot, `${crypto.createHash('sha256').update(firstId).digest('hex')}.json`);
+  const original = { version: 1, totalPlays: 3, firstAt: '2025-01-01T00:00:00Z', lastAt: '2025-01-02T00:00:00Z', importedAt: Date.now(), tracks: [{ uri: 'spotify:track:firstUser', title: 'First', artist: 'Artist', album: 'Album', plays: 3 }] };
+  fs.writeFileSync(firstFile, JSON.stringify(original));
+  state.providerFetch = async url => {
+    const pathname = new URL(url).pathname;
+    if (pathname.endsWith('/api/token')) return providerJson({ access_token: 'synthetic-access', expires_in: 3600 });
+    if (pathname === '/v1/me') return providerJson({ id: firstId });
+    throw new Error('Unexpected provider request');
+  };
+  state.historyParser = () => {
+    testSessions.get(sessionId).spotify = { refreshToken: 'new-account-refresh', userId: secondId, scope: '', cache: new Map() };
+    return { version: 1, username: firstId, totalPlays: 9, firstAt: '2025-01-01T00:00:00Z', lastAt: '2025-02-01T00:00:00Z', tracks: [{ uri: 'spotify:track:firstUser', title: 'First', artist: 'Artist', album: 'Album', plays: 9 }], matchedRecentEvents: [] };
+  };
+  const response = await request('/api/spotify/history', { method: 'POST', headers: { Cookie: `rcrd_session=${sessionId}`, Origin: `http://127.0.0.1:${port}`, 'X-RCRD-Request': '1', 'Content-Type': 'application/zip' }, body: Buffer.from('account-switch') });
+  assert.equal(response.status, 409);
+  assert.match(JSON.parse(response.body).error, /account changed/i);
+  assert.deepEqual(JSON.parse(fs.readFileSync(firstFile, 'utf8')), original);
+  const secondFile = path.join(historyRoot, `${crypto.createHash('sha256').update(secondId).digest('hex')}.json`);
+  assert.equal(fs.existsSync(secondFile), false);
 }));
 
 test('legacy saved sessions receive a bounded expiry and expired sessions cannot restore account access', () => fixture(async ({ request, runtime, key, testSessions, state }) => {
@@ -906,6 +1018,57 @@ test('100-song playback forwards the complete sequence, bounds size, and preserv
   assert.equal((await start(uris)).status, 200); assert.deepEqual(calls, [{ uris }]);
   assert.equal((await start([...uris, 'spotify:track:oversized'])).status, 400);
   assert.equal((await start([uris[0], uris[0]])).status, 200); assert.deepEqual(calls[1], { uris: [uris[0], uris[0]] }); assert.equal(calls.length, 2);
+}));
+
+test('Mix playlist save requires private scope, validates songs, and uses the verified Spotify account', () => fixture(async ({ request, state, testSessions }) => {
+  const paths = []; const uris = Array.from({ length: 10 }, (_, i) => `spotify:track:${String(i + 1).padStart(22, '0')}`);
+  state.providerFetch = async (url, options) => { const pathname = new URL(url).pathname; paths.push(pathname); if (pathname.endsWith('/api/token')) return providerJson({ access_token: 'synthetic-access', expires_in: 3600 }); if (pathname === '/v1/me') return providerJson({ id: 'synthetic-user' }); if (pathname === '/v1/me/playlists') { assert.equal(JSON.parse(options.body).public, false); return providerJson({ id: 'private123' }, 201); } if (pathname === '/v1/playlists/private123/items') { assert.deepEqual(JSON.parse(options.body).uris, paths.filter(path => path === pathname).length === 1 ? uris : [uris[0]]); return providerJson({ snapshot_id: 'saved' }, 201); } throw new Error('Unexpected provider request'); };
+  const headers = { Cookie: `rcrd_session=${sessionId}`, 'X-RCRD-Request': '1', 'Content-Type': 'application/json' };
+  const save = body => request('/api/spotify/mix-playlist', { method: 'POST', headers, body: JSON.stringify(body) });
+  assert.equal((await save({ name: 'My Mix', uris })).status, 403);
+  assert.equal((await request('/api/spotify/playlists', { method: 'POST', headers: { Cookie: headers.Cookie, 'Content-Type': 'application/json' }, body: JSON.stringify({ name: 'Private', uris: [uris[0]] }) })).status, 403);
+  assert.equal((await request('/api/spotify/playlists', { method: 'POST', headers, body: JSON.stringify({ name: 'Private', uris: [uris[0]] }) })).status, 403);
+  testSessions.get(sessionId).spotify.scope = 'playlist-modify-private';
+  assert.equal((await save({ name: 'My Mix', uris: [uris[0], uris[0], ...uris.slice(2)] })).status, 400);
+  assert.equal(paths.includes('/v1/me/playlists'), false);
+  const saved = await save({ name: 'My Mix', uris }); assert.equal(saved.status, 200, saved.body); assert.deepEqual(JSON.parse(saved.body), { id: 'private123', name: 'My Mix', url: 'https://open.spotify.com/playlist/private123' });
+  assert.equal(paths.filter(pathname => pathname === '/v1/me/playlists').length, 1);
+  assert.equal(paths.filter(pathname => pathname === '/v1/playlists/private123/items').length, 1);
+  assert.equal((await request('/api/spotify/playlists', { method: 'POST', headers, body: JSON.stringify({ name: '  ' }) })).status, 400);
+  assert.equal((await request('/api/spotify/playlists', { method: 'POST', headers, body: JSON.stringify({ name: 'My own playlist' }) })).status, 400);
+  assert.equal((await request('/api/spotify/playlists', { method: 'POST', headers, body: JSON.stringify({ name: 'My own playlist', uris: [uris[0], uris[0]] }) })).status, 400);
+  const created = await request('/api/spotify/playlists', { method: 'POST', headers, body: JSON.stringify({ name: 'My own playlist', uris: [uris[0]] }) });
+  assert.equal(created.status, 200, created.body);
+  assert.equal(JSON.parse(created.body).name, 'My own playlist');
+  assert.equal(paths.filter(pathname => pathname === '/v1/me/playlists').length, 2);
+  assert.equal(paths.filter(pathname => pathname === '/v1/playlists/private123/items').length, 2, 'a new playlist adds its selected songs');
+}));
+
+test('a partly created playlist retries song addition without duplicates or cross-account edits', () => fixture(async ({ request, state, testSessions }) => {
+  const uri = 'spotify:track:1234567890123456789012';
+  const headers = { Cookie: `rcrd_session=${sessionId}`, 'X-RCRD-Request': '1', 'Content-Type': 'application/json' };
+  testSessions.get(sessionId).spotify.scope = 'playlist-modify-private';
+  let createCalls = 0, addCalls = 0, existing = [];
+  state.providerFetch = async (url, options) => {
+    const pathname = new URL(url).pathname;
+    if (pathname.endsWith('/api/token')) return providerJson({ access_token: 'synthetic-access', expires_in: 3600 });
+    if (pathname === '/v1/me') return providerJson({ id: 'synthetic-user' });
+    if (pathname === '/v1/me/playlists') { createCalls++; return providerJson({ id: 'private123' }, 201); }
+    if (pathname === '/v1/playlists/private123' && !options.method) return providerJson({ id: 'private123', owner: { id: 'synthetic-user' } });
+    if (pathname === '/v1/playlists/other123' && !options.method) return providerJson({ id: 'other123', owner: { id: 'someone-else' } });
+    if (pathname === '/v1/playlists/private123/items' && !options.method) return providerJson({ items: existing.map(value => ({ item: { uri: value, type: 'track' } })), total: existing.length, next: null });
+    if (pathname === '/v1/playlists/private123/items' && options.method === 'POST') { addCalls++; if (addCalls === 1) return providerJson({ error: 'temporary' }, 503); existing = JSON.parse(options.body).uris; return providerJson({ snapshot_id: 'saved' }, 201); }
+    throw new Error('Unexpected provider request');
+  };
+  const created = await request('/api/spotify/playlists', { method: 'POST', headers, body: JSON.stringify({ name: 'Road trip', uris: [uri] }) });
+  assert.equal(created.status, 200, created.body); assert.equal(JSON.parse(created.body).songsAdded, false); assert.equal(createCalls, 1);
+  const retry = body => request('/api/spotify/playlist/items', { method: 'POST', headers, body: JSON.stringify(body) });
+  assert.equal((await retry({ id: 'other123', uris: [uri] })).status, 403);
+  assert.equal((await retry({ id: 'private123', uris: [uri, uri] })).status, 400);
+  const added = await retry({ id: 'private123', uris: [uri] });
+  assert.equal(added.status, 200, added.body); assert.equal(JSON.parse(added.body).added, 1);
+  const repeated = await retry({ id: 'private123', uris: [uri] });
+  assert.equal(JSON.parse(repeated.body).added, 0); assert.equal(addCalls, 2); assert.equal(createCalls, 1);
 }));
 
 const mixSeedId = '1'.padStart(22, '0');
@@ -1719,6 +1882,20 @@ test('Discogs loads bounded pages and rejects an excessive page count', () => fi
   assert.deepEqual(pages, [1, 2]);
   assert.equal((await request('/api/wantlist', { headers: cookie })).status, 502);
   assert.equal(state.externalCalls, 5);
+}));
+
+test('owned-copy notes persist by verified Discogs account and cannot be written for another copy', () => fixture(async ({ request, state, testSessions, runtime }) => {
+  let current = 'first';
+  state.providerFetch = async url => { const pathname = new URL(url).pathname; if (pathname === '/oauth/identity') return providerJson({ id: current === 'first' ? 17 : 18, username: current }); if (pathname.endsWith('/releases')) return providerJson({ releases: [{ instance_id: 42, basic_information: { id: 9, title: 'Owned record' } }], pagination: { pages: 1 } }); throw new Error('Unexpected provider endpoint'); };
+  const headers = { Cookie: `rcrd_session=${sessionId}`, 'X-RCRD-Request': '1', 'Content-Type': 'application/json' };
+  const note = { instanceId: 42, condition: 'VG+', location: 'Shelf A', pricePaid: '$12', note: 'My copy' };
+  const save = body => request('/api/collection/notes', { method: 'PUT', headers, body: JSON.stringify(body) });
+  assert.equal((await save({ ...note, instanceId: 43 })).status, 404);
+  assert.equal((await save(note)).status, 200);
+  const first = JSON.parse((await request('/api/collection', { headers })).body); assert.equal(first.releases[0].rcrdNotes.note, 'My copy');
+  current = 'second'; testSessions.get(sessionId).accessToken = 'another-discogs-token';
+  const second = JSON.parse((await request('/api/collection', { headers })).body); assert.equal(second.releases[0].rcrdNotes, undefined);
+  assert.equal(fs.readdirSync(path.join(runtime, 'collection-notes')).length, 1);
 }));
 
 test('pressing details are fetched on demand through a validated fixed Discogs route', () => fixture(async ({ request, state }) => {

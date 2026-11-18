@@ -13,7 +13,9 @@ RCRD is a personal music workspace for moving between what you stream and the ph
 - Browse and play Spotify albums, playlists, saved music, recent listening, and personalized discovery.
 - Explore a Discogs collection and wantlist alongside related Spotify releases.
 - Search Discogs editions and compare pressing details without losing the listening context.
-- Build a 100-song Spotify mix from a seed artist using bounded, explainable discovery sources.
+- Preview up to 100 related songs, play a 10–100 song selection, or save it as a private Spotify playlist.
+- Create a private Spotify playlist from Saved music by searching for songs and adding them inside RCRD.
+- Keep private, account-scoped notes for individual copies in a Discogs collection.
 - Optionally import Spotify Extended Streaming History for local play-count context.
 - Optionally look up the current song on Genius without storing lyric text.
 

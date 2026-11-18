@@ -25,6 +25,12 @@ try {
   if ($summary.username -ne 'synthetic-user' -or $summary.totalPlays -ne 2 -or $summary.tracks.Count -ne 1 -or $summary.tracks[0].plays -ne 2) { throw 'Valid synthetic archive produced an incorrect summary.' }
   if ($raw -match 'synthetic-private-ip|ip_addr_decrypted|ms_played') { throw 'Private source fields leaked into the summary.' }
 
+  $ledgerPath = Join-Path $temporary 'recent-ledger.json'
+  [IO.File]::WriteAllText($ledgerPath, '[{"uri":"spotify:track:trackone","playedAt":1735732800000},{"uri":"spotify:track:trackone","playedAt":1735905600000}]')
+  & $parser -ArchivePath $archivePath -OutputPath $outputPath -LedgerPath $ledgerPath
+  $matchedSummary = ConvertFrom-Json -InputObject ([IO.File]::ReadAllText($outputPath))
+  if ($matchedSummary.matchedRecentEvents.Count -ne 1 -or $matchedSummary.matchedRecentEvents[0] -ne 'spotify:track:trackone:1735732800000') { throw 'The parser did not identify exact local ledger overlap.' }
+
   $anonymousPath = Join-Path $temporary 'anonymous.zip'
   $anonymous = [IO.Compression.ZipFile]::Open($anonymousPath, [IO.Compression.ZipArchiveMode]::Create)
   try {

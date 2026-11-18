@@ -1,5 +1,5 @@
 param(
-  [ValidateSet('start', 'restart', 'stop', 'status')]
+  [ValidateSet('start', 'restart', 'stop', 'status', 'check')]
   [string]$Action = 'start',
   [switch]$NoBrowser,
   [switch]$RcrdChrome,
@@ -401,6 +401,38 @@ if ($RcrdFirefox -and -not $NoBrowser -and $Action -in @('start', 'restart')) {
 $health = Get-RcrdHealth
 if ($ExpectedPid -ne 0 -and ($Action -ne 'restart' -or -not $health -or [int]$health.pid -ne $ExpectedPid)) {
   throw 'The requested RCRD process is no longer running. No process was stopped.'
+}
+if ($Action -eq 'check') {
+  $issues = [System.Collections.Generic.List[string]]::new()
+  Write-Host 'RCRD setup check (credential values are hidden)'
+  Write-Host "Project: $ProjectRoot"
+  $node = Get-Command node -ErrorAction SilentlyContinue
+  if ($node) {
+    $nodeVersion = (& node --version 2>$null)
+    Write-Host "Node.js: $nodeVersion"
+    if ($nodeVersion -notmatch '^v(\d+)\.' -or [int]$Matches[1] -lt 18) { $issues.Add('Install Node.js 18 or newer.') }
+  } else { Write-Host 'Node.js: missing'; $issues.Add('Install Node.js 18 or newer and add it to PATH.') }
+  try { Get-RcrdChromePath | Out-Null; Write-Host 'Chrome: found' } catch { Write-Host 'Chrome: missing'; $issues.Add('Install Google Chrome for the RCRD app window.') }
+  $envPath = Join-Path $ProjectRoot '.env'
+  if (Test-Path -LiteralPath $envPath -PathType Leaf) {
+    $configured = @{}
+    foreach ($line in (Get-Content -LiteralPath $envPath)) {
+      if ($line -match '^\s*([A-Z][A-Z0-9_]*)\s*=\s*(.*?)\s*$') { $configured[$Matches[1]] = $Matches[2].Trim('"', "'") }
+    }
+    foreach ($key in @('SPOTIFY_CLIENT_ID', 'SPOTIFY_CLIENT_SECRET', 'DISCOGS_CONSUMER_KEY', 'DISCOGS_CONSUMER_SECRET')) {
+      if ($configured[$key]) { Write-Host "${key}: configured" } else { Write-Host "${key}: missing"; $issues.Add("Set $key in .env.") }
+    }
+  } else { Write-Host '.env: missing'; $issues.Add('Copy .env.example to .env and configure provider credentials.') }
+  if ($health) { Write-Host "Local server: running at $Url" }
+  else {
+    $portOwnerId = Get-PortOwnerId
+    if ($portOwnerId) { Write-Host "Port ${Port}: occupied by PID $portOwnerId"; $issues.Add("Port $Port is used by another process.") }
+    else { Write-Host "Port ${Port}: available" }
+  }
+  Write-Host 'Troubleshooting logs: .data/server.log and .data/server-error.log (contents hidden)'
+  if ($issues.Count) { foreach ($issue in $issues) { Write-Host "Action: $issue" }; exit 1 }
+  Write-Host 'Setup checks passed.'
+  exit 0
 }
 if ($Action -eq 'status') {
   if ($health) { Write-Host "RCRD is running at $Url (PID $($health.pid))."; exit 0 }

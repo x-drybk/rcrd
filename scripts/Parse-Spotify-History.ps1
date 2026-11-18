@@ -1,6 +1,7 @@
 param(
   [Parameter(Mandatory = $true)][string]$ArchivePath,
-  [Parameter(Mandatory = $true)][string]$OutputPath
+  [Parameter(Mandatory = $true)][string]$OutputPath,
+  [string]$LedgerPath
 )
 
 $ErrorActionPreference = 'Stop'
@@ -13,6 +14,18 @@ $maximumEvents = 2000000
 $maximumTracks = 100000
 $minimumPlayMs = 30000
 $tracks = @{}
+$ledgerEvents = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+$matchedLedgerEvents = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+if ($LedgerPath) {
+  $ledger = ConvertFrom-Json -InputObject ([IO.File]::ReadAllText($LedgerPath, [Text.Encoding]::UTF8))
+  if ($ledger -isnot [array] -or $ledger.Count -gt 100000) { throw 'The local recent-play ledger is invalid.' }
+  foreach ($item in $ledger) {
+    $ledgerUri = [string]$item.uri
+    $ledgerPlayedAt = [long]0
+    if ($ledgerUri -cnotmatch '^spotify:track:[A-Za-z0-9]+$' -or -not [long]::TryParse([string]$item.playedAt, [ref]$ledgerPlayedAt) -or $ledgerPlayedAt -lt 0) { throw 'The local recent-play ledger is invalid.' }
+    [void]$ledgerEvents.Add("$ledgerUri`:$ledgerPlayedAt")
+  }
+}
 $usernames = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
 $totalBytes = [long]0
 $totalEvents = 0
@@ -60,6 +73,8 @@ try {
         }
         $tracks[$uri].plays++
         $totalPlays++
+        $eventKey = "$uri`:$($playedAt.ToUnixTimeMilliseconds())"
+        if ($ledgerEvents.Contains($eventKey)) { [void]$matchedLedgerEvents.Add($eventKey) }
         if ($playedAt -lt $firstAt) { $firstAt = $playedAt }
         if ($playedAt -gt $lastAt) { $lastAt = $playedAt }
       }
@@ -78,6 +93,7 @@ $summary = @{
   firstAt = $firstAt.ToUniversalTime().ToString('o')
   lastAt = $lastAt.ToUniversalTime().ToString('o')
   tracks = @($tracks.Values | Sort-Object -Property plays -Descending)
+  matchedRecentEvents = @($matchedLedgerEvents)
 }
 $json = ConvertTo-Json -InputObject $summary -Depth 5 -Compress
 [IO.File]::WriteAllText($OutputPath, $json, [Text.UTF8Encoding]::new($false))

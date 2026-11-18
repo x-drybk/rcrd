@@ -37,8 +37,11 @@ const {createFixture,ORIGIN,tracks}=require('../walkthrough/source/demo-fixture.
     assert.match(await dialog.textContent(),/Related artist via ListenBrainz/);assert.match(await dialog.textContent(),/Shares Discogs style: Indie Rock/);
     assert.match(await page.locator('#spotifyMixDescription').textContent(),/Your library and imported listening history stay local/);
     assert.deepEqual(await page.locator('#spotifyMixDescription a').evaluateAll(links=>links.map(link=>link.href)),['https://musicbrainz.org/','https://listenbrainz.org/','https://www.discogs.com/']);
-    await dialog.locator('input').nth(1).uncheck();
+    await dialog.locator('.mix-track input').nth(1).uncheck();
     assert.match(await page.locator('#spotifyMixStatus').textContent(),/99 tracks selected/);
+    assert.equal(await page.locator('#spotifyMixStart').isDisabled(),false);
+    for(let index=10;index<100;index++)await dialog.locator('.mix-track input').nth(index).uncheck();
+    assert.match(await page.locator('#spotifyMixStatus').textContent(),/9 tracks selected/);
     assert.equal(await page.locator('#spotifyMixStart').isDisabled(),true);
     if(process.env.RCRD_MIX_SCREENSHOT)await page.screenshot({path:process.env.RCRD_MIX_SCREENSHOT});
     await page.getByRole('button',{name:'Close RCRD Mix'}).click();
@@ -47,10 +50,10 @@ const {createFixture,ORIGIN,tracks}=require('../walkthrough/source/demo-fixture.
     await page.locator('#spotifyMixStart').click();await dialog.waitFor({state:'hidden'});
     assert.equal(starts.length,1);assert.equal(starts[0].uris.length,100);assert.equal(starts[0].uris[0],seed.uri);
     sparse=true;await page.locator('#playerMix').click();
-    await page.waitForFunction(()=>document.querySelector('#spotifyMixStatus').textContent.includes('at least 100 are required'));
+    await page.waitForFunction(()=>document.querySelector('#spotifyMixStatus').textContent.includes('tracks selected'));
     assert.match(await page.locator('#spotifyMixStatus').textContent(),/ListenBrainz related-artist discovery was unavailable/);
-    assert.equal(await page.locator('#spotifyMixStart').isDisabled(),true);assert.equal(starts.length,1);
+    assert.equal(await page.locator('#spotifyMixStart').isDisabled(),false);assert.equal(starts.length,1);
     assert.deepEqual(errors,[]);fixture.assertClean();
-    console.log('PASS related-music Mix: discovery-only 100-track preview, source reasons and privacy disclosure, 99-track refusal, cancellation, confirmed full playback, and specific sparse-source warnings');
+    console.log('PASS related-music Mix: 100-track preview, shorter selection, cancellation, confirmed playback, and sparse-source warnings');
   }finally{await browser.close();}
 })().catch(error=>{console.error(error);process.exitCode=1;});

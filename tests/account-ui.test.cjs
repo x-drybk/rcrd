@@ -27,11 +27,12 @@ function harness(fetch = async () => ({ ok: true, json: async () => ({}) }), ext
   const nodes = new Map();
   const node = selector => {
     if (!nodes.has(selector)) nodes.set(selector, {
-      value: '', innerHTML: '', textContent: '', disabled: false, hidden: false, children: [], dataset: {}, style: {},
+      value: '', innerHTML: '', textContent: '', disabled: false, hidden: false, children: [], dataset: {}, style: {}, elements: { condition: { value: '' }, location: { value: '' }, pricePaid: { value: '' }, note: { value: '' } },
       attributes: {}, classList: { add() {}, remove() {}, toggle() {} },
       setAttribute(name, value) { this.attributes[name] = String(value); },
+      getAttribute(name) { return this.attributes[name]; },
       replaceChildren() { this.innerHTML = ''; this.children = []; },
-      append(...children) { this.children.push(...children); }
+      append(...children) { this.children.push(...children); }, close() { this.open = false; }
     });
     return nodes.get(selector);
   };
@@ -42,11 +43,11 @@ function harness(fetch = async () => ({ ok: true, json: async () => ({}) }), ext
     setSidebarPlaylistOptions() {},
     renderListeningDiscogsSuggestions() {}, setSong() {}, closeLyricsDialog() {}, updatePlaybackModes() {}, loadSpotifyDevices() {}, syncCurrentSpotifyTrack() {},
     updateProgress() {}, renderPlayer() {}, updateHomeRecommendations() {},
-    purgeStoredDiscogsRecords() {},
+    purgeStoredDiscogsRecords() {}, restoreBrowsingContext() {}, resetCreatePlaylistUi() {},
     sortRecords: records => records, spotifyAlbumCard: record => `<article>${record.title}</article>`, discogsDataCredit: () => '',
     renderPagination() {}, syncThemedSelect() {}, syncSpotifySortControls() {}, showToast() {}, scheduleSpotifyPlayCounts() {}, resetSpotifyPlayCounts() {}, spotifyPlayCounts: new Map(), ...extra
   });
-  vm.runInContext(`let spotifyConnected=true,spotifyAccountGeneration=0,spotifyHomeRequest=null,spotifyHomeNextRefresh=0,spotifyHomeRateLimitedUntil=0,
+  vm.runInContext(`let spotifyConnected=true,spotifyAccountGeneration=0,spotifyAccountMarker=null,spotifyHomeRequest=null,spotifyHomeNextRefresh=0,spotifyHomeRateLimitedUntil=0,
     spotifyLibraryAlbums=[],spotifySavedAlbums=[],spotifyLibraryTracks=[],spotifyLibraryPlaybackRecords=[],spotifyHomeRecommendations=[],spotifyTopAlbums=[],spotifyTopRequest=null,spotifyCanReadTop=false,homeDiscoveryMode='recent',
     spotifyLibraryLoaded=false,spotifySavedLibraryLoaded=false,spotifyPlaylistPreviewState=null,spotifyLibraryPromise=null,spotifyLibraryError='',spotifyTrackUri=null,
     spotifyLibraryProgressTimer=null,spotifyLibraryProgressBusy=false,spotifyLibraryLastUpdated=0,spotifyLibraryLastUpdatedGeneration=-1,spotifyLibrarySyncSource='live',spotifyNoticeTimer=null,
@@ -59,7 +60,7 @@ function harness(fetch = async () => ({ ok: true, json: async () => ({}) }), ext
     spotifySearchMode='library',spotifySearchSequence=0,spotifySearchTimer=null,spotifySearchCompletion=null,collectionSpotifyLookup=null,spotifyCatalogResults=[],spotifyCatalogAlbumView=null,volume=0.65,
     shuffleEnabled=false,repeatMode='off',spotifyHasContext=false,shuffleRequestPending=false,shuffleRevision=0,repeatRequestPending=false,repeatRevision=0,
     listeningHistoryRevision=0,listeningHistoryBusy=false,listeningHistoryPage=1,listeningHistorySearchTimer=null;
-    let apiConnected=true,discogsAccountGeneration=0,discogsSearchSequence=0,discogsSearchTimer=null,discogsMasterId=null,discogsMasterTitle='',collection=[],wantlist=[],
+    let apiConnected=true,discogsAccountGeneration=0,discogsAccountMarker=null,editingCollectionInstance=null,discogsSearchSequence=0,discogsSearchTimer=null,discogsMasterId=null,discogsMasterTitle='',collection=[],wantlist=[],
     collectionPage=1,wantlistPage=1,collectionPageSize=24,wantlistPageSize=24,discogsSearchResults=[],discogsSearchPagination={};
     const discogsRefreshSequence={collection:0,wantlist:0},discogsLoadedAt={collection:0,wantlist:0},discogsLastFailureAt={collection:0,wantlist:0},discogsRefreshRequest={collection:null,wantlist:null},DISCOGS_LIST_FRESH_MS=60000;
     const pressingCompareSelected=new Map();let pressingCompareRevision=0;`, context);
@@ -79,6 +80,79 @@ function harness(fetch = async () => ({ ok: true, json: async () => ({}) }), ext
     context
   };
 }
+
+test('browsing context restores only after the connected account marker matches', () => {
+  const h = harness(); let navigations = 0; let searches = 0;
+  h.node('[data-view="spotify"]').click = () => { navigations++; };
+  h.context.sessionStorage = { getItem: () => JSON.stringify({ owner: 'spotify:account-one', view: 'spotify', query: 'my album', scope: 'catalog' }) };
+  h.context.setSpotifySearchScope = value => { h.context.restoredScope = value; };
+  h.context.filterCards = () => { searches++; };
+  h.context.updateSearchContext = () => {};
+  h.run('let browsingContextRestored=false;');
+  h.load('browsingContextOwner','restoreBrowsingContext');
+  h.run("spotifyAccountMarker='account-two';restoreBrowsingContext()");
+  assert.equal(navigations, 0);
+  h.run("spotifyAccountMarker='account-one';restoreBrowsingContext()");
+  assert.equal(navigations, 1); assert.equal(searches, 1); assert.equal(h.node('#searchInput').value, 'my album'); assert.equal(h.context.restoredScope, 'catalog');
+  h.run('restoreBrowsingContext()'); assert.equal(navigations, 1);
+});
+
+test('creating a playlist sends selected songs and opens it inside RCRD', async () => {
+  const sent = []; let refreshed = 0, opened = '';
+  const h = harness(async (url, options) => { sent.push({ url, options }); return { ok: true, json: async () => ({ id: 'playlist123', name: 'Road trip', url: 'https://open.spotify.com/playlist/playlist123' }) }; });
+  h.context.refreshSpotifyPlaylists = async () => { refreshed++; };
+  h.context.loadSpotifyPlaylist = async id => { opened = id; };
+  h.node('[data-view="spotify"]').click = () => {};
+  h.node('#spotifyPlaylistSelect').options = [];
+  h.node('#spotifyPlaylistSelect').add = option => h.node('#spotifyPlaylistSelect').options.push(option);
+  h.run("let createPlaylistSongs=[{uri:'spotify:track:1234567890123456789012',name:'A song',artist:'An artist'}],createPlaylistPendingId='';");
+  h.load('updateCreatePlaylistSubmit', 'submitCreatePlaylist');
+  h.node('#spotifyCreatePlaylistName').value = 'Road trip';
+  await h.run('submitCreatePlaylist({preventDefault(){}})');
+  assert.equal(sent.length, 1); assert.equal(sent[0].url, '/api/spotify/playlists');
+  assert.equal(JSON.parse(sent[0].options.body).name, 'Road trip');
+  assert.deepEqual(JSON.parse(sent[0].options.body).uris, ['spotify:track:1234567890123456789012']);
+  assert.equal(refreshed, 1);
+  assert.equal(opened, 'playlist123');
+  assert.equal(h.node('#spotifyCreatePlaylistDialog').open, false);
+});
+
+test('playlist song-add failure retries the same playlist instead of creating another', async () => {
+  const sent = [];
+  const h = harness(async (url, options) => { sent.push({ url, body: JSON.parse(options.body) }); return { ok: true, json: async () => sent.length === 1 ? { id: 'playlist123', name: 'Road trip', songsAdded: false } : { ok: true, added: 1 } }; });
+  h.context.refreshSpotifyPlaylists = async () => {};
+  h.context.loadSpotifyPlaylist = async () => {};
+  h.node('[data-view="spotify"]').click = () => {};
+  h.node('#spotifyPlaylistSelect').options = [];
+  h.node('#spotifyPlaylistSelect').add = option => h.node('#spotifyPlaylistSelect').options.push(option);
+  h.run("let createPlaylistSongs=[{uri:'spotify:track:1234567890123456789012',name:'A song',artist:'An artist'}],createPlaylistPendingId='';");
+  h.load('updateCreatePlaylistSubmit', 'submitCreatePlaylist');
+  h.node('#spotifyCreatePlaylistName').value = 'Road trip';
+  await h.run('submitCreatePlaylist({preventDefault(){}})');
+  assert.equal(h.node('#spotifyCreatePlaylistSubmit').textContent, 'Retry adding songs');
+  assert.equal(h.node('#spotifyCreatePlaylistName').disabled, true);
+  await h.run('submitCreatePlaylist({preventDefault(){}})');
+  assert.deepEqual(sent.map(item => item.url), ['/api/spotify/playlists', '/api/spotify/playlist/items']);
+  assert.equal(sent[1].body.id, 'playlist123');
+});
+
+test('playlist picker searches songs and keeps a unique removable selection', async () => {
+  const requested = [];
+  const h = harness(async url => { requested.push(url); return { ok: true, json: async () => ({ tracks: { items: [{ uri: 'spotify:track:1234567890123456789012', name: 'A song', artists: [{ name: 'An artist' }], album: { name: 'An album', images: [] } }] } }) }; });
+  h.run("let createPlaylistSongs=[],createPlaylistSearchResults=[],createPlaylistSearchSequence=0;");
+  h.load('updateCreatePlaylistSubmit', 'renderCreatePlaylistSongs', 'renderCreatePlaylistSearchResults', 'searchCreatePlaylistSongs', 'addCreatePlaylistSong', 'removeCreatePlaylistSong');
+  h.node('#spotifyCreatePlaylistName').value = 'Road trip';
+  h.node('#spotifyCreatePlaylistSearch').value = 'A song';
+  await h.run('searchCreatePlaylistSongs()');
+  assert.equal(requested[0], '/api/spotify/search?q=A%20song&type=track');
+  assert.match(h.node('#spotifyCreatePlaylistResults').innerHTML, /A song/);
+  h.run("addCreatePlaylistSong('spotify:track:1234567890123456789012');addCreatePlaylistSong('spotify:track:1234567890123456789012')");
+  assert.equal(h.node('#spotifyCreatePlaylistCount').textContent, '1 / 100');
+  assert.equal(h.node('#spotifyCreatePlaylistSubmit').disabled, false);
+  h.run("removeCreatePlaylistSong('spotify:track:1234567890123456789012')");
+  assert.equal(h.node('#spotifyCreatePlaylistCount').textContent, '0 / 100');
+  assert.equal(h.node('#spotifyCreatePlaylistSubmit').disabled, true);
+});
 
 test('provider credits point to the exact source and reject untrusted links', () => {
   const h=harness(undefined,{cover:()=>'<div class="cover"></div>',shelfBadges:()=>'',setPlayerAlbum(){}});
@@ -1585,6 +1659,8 @@ test('About closes on its backdrop but stays open for content and dialog-surface
   pointer(dialog, 50, 250);
   assert.equal(dialog.open, false, 'a closed dialog remains closed');
   assert.match(source, /querySelector\('#aboutDialog'\)\.addEventListener\('pointerdown',handleAboutDialogBackdropPointer\)/);
+  assert.match(source, /querySelector\('#spotifyMixDialog'\)\.addEventListener\('pointerdown',handleAboutDialogBackdropPointer\)/);
+  assert.match(source, /querySelector\('#spotifyCreatePlaylistDialog'\)\.addEventListener\('pointerdown',handleAboutDialogBackdropPointer\)/);
 });
 
 test('mobile Settings avatar follows the account image and disconnected placeholder', () => {
@@ -1704,6 +1780,18 @@ test('connected status starts the player before background Spotify requests', as
   await h.run('refreshSpotifyStatus()');
   assert.deepEqual(events, ['/api/spotify/status', 'player', 'profile', 'recent', 'playlists', 'library']);
   assert.match(markup, /<script defer src="https:\/\/sdk\.scdn\.co\/spotify-player\.js"><\/script>\s*<script src="app\.js"><\/script>/);
+});
+
+test('a changed Spotify account marker resets in-memory user state before loading the new account', async () => {
+  let resets = 0;
+  const h = harness(async () => ({ ok: true, json: async () => ({ connected: true, accountMarker: 'new-account', canModifyLibrary: true }) }), {
+    resetSpotifyAccountUi: () => { resets++; }, initSpotifyPlayer() {}, renderSpotifyLibrary() {}, renderHomeRecommendations() {}, refreshSpotifyProfile() {}, refreshSpotifyHome() {}, refreshSpotifyPlaylists() {}, maybeLoadSpotifyLibrary() {}, renderPlayerLiked() {}, URLSearchParams, location: { search: '' }
+  });
+  h.run("spotifyAccountMarker='old-account';spotifyConnected=true");
+  h.load('refreshSpotifyStatus');
+  await h.run('refreshSpotifyStatus()');
+  assert.equal(resets, 1);
+  assert.equal(h.run('spotifyAccountMarker'), 'new-account');
 });
 
 test('restored catalog scope never paints saved-library loading after Spotify connects', async () => {

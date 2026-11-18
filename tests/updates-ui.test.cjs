@@ -14,10 +14,24 @@ test('About exposes the GitHub update check without adding a separate menu or Se
   assert.match(markup, /id="updateDialog"[\s\S]*id="updateReleaseLink"[\s\S]*id="updateInstallHelp"/);
   assert.match(client, /fetch\('\/api\/update-check',\{cache:'no-store'\}\)/);
   assert.match(client, /data\.updateAvailable/);
+  assert.match(client, /link\.textContent='View release notes ↗'/);
+  assert.match(client, /link\.textContent='View release and download ↗'/);
   assert.match(client, /closest\('\[data-check-updates\]'\)/);
+  const css = fs.readFileSync(path.join(root, 'distinction.css'), 'utf8');
+  assert.match(css, /\.update-release-link\[hidden\]\{display:none\}/);
 });
 
 test('update instructions preserve credentials and local account data', () => {
   assert.match(markup, /keep your existing <code>\.env<\/code> and <code>\.data<\/code>/);
   assert.match(markup, /target="_blank" rel="noopener noreferrer" hidden>View release and download/);
+});
+
+test('profile renewal notifications are actionable, dismissible, and periodically refreshed', () => {
+  assert.equal((markup.match(/profile-alert-indicator/g) || []).length, 2);
+  assert.equal((markup.match(/profile-renewal-alert/g) || []).length, 2);
+  assert.match(markup, /data-spotify-authorize>Renew Spotify/);
+  assert.match(client, /dataset\.dismissSpotifyRenewal/);
+  assert.match(client, /rcrd-spotify-renewal-dismissed/);
+  assert.match(client, /setInterval\(refreshSpotifyRenewalNotice,21600000\)/);
+  assert.match(client, /\/api\/notifications\/spotify-renewal\/dismiss/);
 });
