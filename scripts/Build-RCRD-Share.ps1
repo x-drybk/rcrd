@@ -26,6 +26,7 @@ $files = @(
   'package.json',
   'RCRD.cmd',
   'scripts/Restart-RCRD.cjs',
+  'scripts/Launch-RCRD-Update.cjs',
   'scripts/Update-RCRD.ps1',
   'scripts/Parse-Spotify-History.ps1',
   'scripts/Start-RCRD.ps1',

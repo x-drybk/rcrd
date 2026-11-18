@@ -1,137 +1,23 @@
-# RCRD — Start here
+# RCRD local source package
 
-**A local-first music companion that brings Spotify listening, playback, and discovery together with Discogs collection, wantlist, and release data.**
+RCRD runs on your own computer. It connects Spotify listening with Discogs catalog, collection, and wantlist features. This package is source code for a local app, not a hosted service or a multi-user server.
 
-![RCRD connects Spotify listening and playback with Discogs record discovery](assets/rcrd-project-overview.png)
+After launch, open your profile menu → **Help & setup guide** → **Watch walkthrough** for a narrated tour. The video and its readable transcript are included locally; playback is optional and does not require a streaming account.
 
-RCRD is a personal music workspace for moving between what you stream and the physical releases you collect or want to find. It runs on your own computer: developer credentials, refresh tokens, listening-history summaries, and browser data remain local rather than being sent to a hosted RCRD service.
+## Before starting
 
-[Watch the complete walkthrough](walkthrough/RCRD-complete-walkthrough.mp4) or read its [accessible transcript](walkthrough/RCRD-complete-walkthrough-transcript.md).
+- Install [Node.js](https://nodejs.org/en/download) 18 or newer (choose an LTS installer with npm) and [Google Chrome](https://www.google.com/chrome/) on Windows before launching RCRD.
+- Create an app in the [Spotify Developer Dashboard](https://developer.spotify.com/dashboard). Follow [Spotify's app setup guide](https://developer.spotify.com/documentation/web-api/concepts/apps) to find the Client ID and Client Secret, and register `http://127.0.0.1:3000/auth/spotify/callback` as its Redirect URI for the default port.
+- Register an application in [Discogs Developer settings](https://www.discogs.com/settings/developers). [Discogs' settings guide](https://support.discogs.com/hc/en-us/articles/360007423833-How-Do-I-Change-My-Account-Settings) shows where Developers is. Note the Consumer Key and Consumer Secret, and register `http://127.0.0.1:3000/auth/discogs/callback` as its callback URL for the default port. RCRD does not use a personal API token.
+- Copy `.env.example` to `.env` and enter those credentials locally. Keep the callback values consistent with the URLs registered above. Never send `.env` to another person.
+- Run `npm install`, then open `Launch RCRD.cmd`. Use `RCRD.cmd` for restart and stop controls.
 
-## What RCRD does
+RCRD stores account authorization, Spotify library cache, and its dedicated browser profile under `.data` on your computer. Keep that directory private. Do not expose the local server to other machines or the internet. See the [Admin Guide](ADMIN_GUIDE.md) and [Security Note](SECURITY.md) for details.
 
-- Browse and play Spotify albums, playlists, saved music, recent listening, and personalized discovery.
-- Explore a Discogs collection and wantlist alongside related Spotify releases.
-- Search Discogs editions and compare pressing details without losing the listening context.
-- Preview up to 100 related songs, play a 10–100 song selection, or save it as a private Spotify playlist.
-- Create a private Spotify playlist from Saved music by searching for songs and adding them inside RCRD.
-- Keep private, account-scoped notes for individual copies in a Discogs collection.
-- Optionally import Spotify Extended Streaming History for local play-count context.
-- Optionally look up the current song on Genius without storing lyric text.
+On Windows, when RCRD was started with **Launch RCRD.cmd**, use **Profile → About RCRD → Check for updates** and choose **Install update** when a verified release is available. RCRD verifies the download, preserves `.env` and `.data`, then restarts. If automatic installation is unavailable, download the release ZIP, close RCRD, replace the application files, and keep your existing `.env` and `.data`.
 
-## Engineering highlights
+Optional recorded play counts can start with the account holder's Extended Streaming History ZIP from [Spotify Privacy](https://www.spotify.com/account/privacy/). After connecting the matching Spotify account, select **Settings → Your listening history → Import Spotify ZIP**. Saved music also adds newer Spotify recent-play events across devices, but long gaps can leave missing plays. RCRD keeps a local summary and recent-play ledger, not the raw ZIP; reimport a newer export to update the baseline. Use **Delete recorded counts** in the same Settings card before sharing the computer.
 
-- Reconciles Spotify recordings with Discogs releases while treating ambiguous editions as possible matches rather than false certainties.
-- Keeps OAuth credentials and long-lived authorization state on a loopback-only Node server.
-- Handles provider throttling, stale caches, interrupted requests, account changes, and partial data explicitly.
-- Includes responsive layouts, keyboard-accessible controls, reduced-motion behavior, and readable empty, loading, retry, and error states.
-- Ships with an automated test suite covering the UI, provider boundaries, playback behavior, security controls, and Windows launcher.
+Optional lyrics require a [Genius API client](https://genius.com/api-clients). Put its Client Access Token in `GENIUS_ACCESS_TOKEN` in your private `.env`, restart RCRD, and choose **Lyrics** in the track bar. RCRD sends the current title and artist to Genius only when requested, then displays a Genius-hosted view when available; Genius may receive your IP address. Lyrics are not stored by RCRD. If the hosted view cannot load, use **Read on Genius**. RCRD is independent and not affiliated with Genius. Keep the token out of source packages.
 
-## Project boundaries
-
-RCRD is designed for one person on one trusted computer. It is a portfolio and source-review project, not a hosted multi-user service. Do not expose its local server to a shared network or the public internet without a separate security review and deployment design.
-
-## Download RCRD from GitHub
-
-1. Open the [latest RCRD release](https://github.com/x-drybk/rcrd/releases/latest). You do not need to sign in or install Git.
-2. Under **Assets**, select the file named `RCRD-<version>.zip` (not **Source code (zip)**).
-3. When the download finishes, open your **Downloads** folder.
-4. Right-click the downloaded `RCRD-<version>.zip` file, select **Extract All...**, then select **Extract**.
-5. Open the extracted folder and open `README.md`. Continue with **First-time setup** below.
-
-## Find what you need
-
-- **New user:** Follow the [first-time setup](#first-time-setup) before launching RCRD. After launch, select your profile image and open **Help & setup guide**. Its **Watch walkthrough** section offers a narrated, chaptered tour and a readable transcript.
-- **Already set up:** Double-click **Launch RCRD.cmd** to open the app. Use **RCRD.cmd** for server status, restart, or stop.
-- **Configuration, maintenance, or troubleshooting:** Open the [Admin Guide](ADMIN_GUIDE.md).
-- **Privacy and sharing:** Read the [Security Note](SECURITY.md) before sharing a source package or changing how the local server is exposed.
-
-Optional recorded play counts: connect the matching Spotify account, request Spotify's Extended Streaming History ZIP from [Spotify Privacy](https://www.spotify.com/account/privacy/), then select **Settings → Your listening history → Import Spotify ZIP**. Saved music combines that historical snapshot with newer recent-play events reported by Spotify across devices. An “≈” count means the imported ZIP matched one song by title and artist under a different Spotify track ID; ambiguous or absent matches say “Not recorded” instead of claiming zero. Long gaps can exceed Spotify's recent-play window, so these are not guaranteed lifetime totals. RCRD does not download the export for you or keep the raw ZIP. See the [Admin Guide](ADMIN_GUIDE.md) for limits and deletion.
-
-Optional lyrics: create a [Genius API client](https://genius.com/api-clients), put its Client Access Token in `GENIUS_ACCESS_TOKEN` in your private local `.env`, and restart RCRD. Select **Lyrics** in the track bar to request the current song. RCRD matches its title and artist through Genius and shows Genius-hosted lyrics when available, with a direct link as fallback; it does not store lyric text. See the [Admin Guide](ADMIN_GUIDE.md) for setup, privacy, and troubleshooting. RCRD is independent and is not affiliated with Genius.
-
-## Purpose
-
-This project is designed to run on a single machine in a trusted local environment. It connects to Spotify and Discogs through a local Node server, keeps OAuth state on the machine, and stores browser preferences locally.
-
-It is intentionally not designed as a public internet service or shared multi-user deployment.
-
-## Local-first security model
-
-- The server binds to loopback by default.
-- OAuth and runtime state are stored in a local `.data` directory.
-- Sensitive credentials are kept server-side.
-- Optional Genius lyrics are loaded on demand in a sandboxed view; opening that view can contact Genius from your browser.
-- Public GitHub sharing is acceptable as source code review, but this app should not be exposed to the internet or a shared network without a separate security review and deployment hardening.
-
-See [SECURITY.md](SECURITY.md) for the repo’s security guidance.
-
-## Requirements
-
-- [Node.js](https://nodejs.org/en/download) 18 or newer (choose an LTS installer with npm)
-- [Google Chrome](https://www.google.com/chrome/) for the dedicated Windows launcher
-- Spotify and Discogs developer app credentials (see the first-run steps below)
-
-Read these steps before opening RCRD for the first time; the in-app guide is only available after the launcher succeeds.
-
-## First-time setup
-
-1. In the [Spotify Developer Dashboard](https://developer.spotify.com/dashboard), create an app with the Web API and Web Playback SDK enabled. The [Spotify app setup guide](https://developer.spotify.com/documentation/web-api/concepts/apps) explains where to find its Client ID and Client Secret. Register `http://127.0.0.1:3000/auth/spotify/callback` as its Redirect URI for RCRD's default port.
-2. In [Discogs Developer settings](https://www.discogs.com/settings/developers), register an application and note its Consumer Key and Consumer Secret. Register `http://127.0.0.1:3000/auth/discogs/callback` as its callback URL for the default port. [Discogs' account-settings guide](https://support.discogs.com/hc/en-us/articles/360007423833-How-Do-I-Change-My-Account-Settings) shows where to find Developers. RCRD uses application credentials, not a personal API token.
-3. Copy `.env.example` to `.env`. Put your Spotify values in `SPOTIFY_CLIENT_ID` and `SPOTIFY_CLIENT_SECRET`, and Discogs values in `DISCOGS_CONSUMER_KEY` and `DISCOGS_CONSUMER_SECRET`. Keep both callback values consistent with those registered above.
-4. Keep `.env` and `.data` local and private; do not publish or share them.
-5. Install dependencies:
-
-```bash
-npm install
-```
-
-6. On Windows, open **Launch RCRD.cmd**. To start only the server for use in an ordinary browser, run:
-
-```bash
-npm start
-```
-
-For the server-only option, open:
-
-```text
-http://127.0.0.1:3000
-```
-
-## Commands
-
-```bash
-npm start
-npm test
-npm run test:history-parser
-npm run test:launcher
-npm run test:share
-npm run launch
-npm run restart
-npm run stop
-npm run status
-```
-
-On Windows, **Launch RCRD.cmd** (or `npm run launch`) starts the local server and opens RCRD in a Chrome app window without the normal tab and navigation rows. It uses a separate profile at `.data/chrome-profile`, not your normal Chrome profile; browser logins and preferences are not imported. When switching from the previous Firefox launcher, reconnect Spotify and Discogs once and set any browser-stored preferences again. Later launches retain this Chrome profile's cookies and preferences. **RCRD.cmd** provides restart and stop controls; a manual restart leaves the app window open, so reload it afterward. `npm start` starts only the server for ordinary browser use. Keep `.data` private because the profile contains browser session data.
-
-Use **Profile → About RCRD → Check for updates** to compare the installed version with the latest published GitHub Release. When a verified `RCRD-<version>.zip` is available, choose **Install update**. RCRD downloads and verifies the ZIP, replaces its application files, preserves `.env` and `.data`, and restarts. The release notes remain available from the same dialog. Automatic installation requires the Windows launcher and a published release ZIP with a SHA-256 digest.
-
-The Windows launcher creates new `.data` and browser-profile directories with private permissions for your Windows account, SYSTEM, and Administrators. It does not silently change permissions on an existing directory: `.data` must not inherit access, and neither it nor the browser profile may allow another account. A browser profile may inherit only those approved permissions from the protected `.data` directory. Back up `.data`, then use Windows **Properties → Security → Advanced** to review the directory and child items before changing access. `npm start` does not perform this Windows launcher check.
-
-## Notes
-
-- This app is intended for local personal use.
-- Do not run it on a public host without a separate secure deployment design.
-- Features such as playback, account disconnect, and provider API calls are designed for a single trusted user context.
-
-## Sharing a local source package
-
-On Windows, run `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/Build-RCRD-Share.ps1` to create a ZIP in `release/` from an explicit list of app files. It excludes `.env`, `.data`, browser profiles, tests, local shortcuts, and legacy desktop files. The package uses a name-free `SHARE_README.md` as its setup guide by default. To include the existing contributor credit in the packaged README, add `-IncludeContributorCredit`. Review licensing and attribution before broader redistribution. Do not ZIP the entire working directory or expose its local server to other machines.
-
-## Author and contributors
-
-Created by Kevin M. Byrd with ChatGPT.
-
-## License
-
-RCRD is available under the [MIT License](LICENSE).
+The packaging script selects named source files and excludes known runtime-data paths. This default setup note omits contributor names; review the archive, contributor credit, and licensing before broader redistribution.
