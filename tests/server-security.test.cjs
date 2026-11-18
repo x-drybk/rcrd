@@ -9,6 +9,7 @@ const vm = require('node:vm');
 const { EventEmitter } = require('node:events');
 
 const source = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
+const packageVersion = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8')).version;
 const sessionId = 'a'.repeat(48);
 
 test('update check compares the package version with a validated GitHub release', () => fixture(async ({ request, state }) => {
@@ -20,7 +21,7 @@ test('update check compares the package version with a validated GitHub release'
   };
   const response = await request('/api/update-check');
   assert.equal(response.status, 200);
-  assert.deepEqual(JSON.parse(response.body), { currentVersion: '1.3.38', latestVersion: '9.4.1', updateAvailable: true, releaseUrl: 'https://github.com/x-drybk/rcrd/releases/tag/v9.4.1', publishedAt: '2026-11-16T12:00:00Z' });
+  assert.deepEqual(JSON.parse(response.body), { currentVersion: packageVersion, latestVersion: '9.4.1', updateAvailable: true, releaseUrl: 'https://github.com/x-drybk/rcrd/releases/tag/v9.4.1', publishedAt: '2026-11-16T12:00:00Z' });
   assert.equal(state.externalCalls, 1);
 }));
 
