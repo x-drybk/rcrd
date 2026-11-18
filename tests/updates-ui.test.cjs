@@ -11,19 +11,19 @@ test('About exposes the GitHub update check without adding a separate menu or Se
   assert.equal((markup.match(/data-profile-action="update"/g) || []).length, 0);
   assert.match(markup, /id="settingsAbout"[\s\S]*data-check-updates>Check for updates/);
   assert.doesNotMatch(markup, /<h2>Updates<\/h2>/);
-  assert.match(markup, /id="updateDialog"[\s\S]*id="updateReleaseLink"[\s\S]*id="updateInstallHelp"/);
+  assert.match(markup, /id="updateDialog"[\s\S]*id="updateInstallButton"[\s\S]*id="updateReleaseLink"[\s\S]*id="updateInstallHelp"/);
   assert.match(client, /fetch\('\/api\/update-check',\{cache:'no-store'\}\)/);
   assert.match(client, /data\.updateAvailable/);
   assert.match(client, /link\.textContent='View release notes ↗'/);
-  assert.match(client, /link\.textContent='View release and download ↗'/);
+  assert.match(client, /fetch\('\/api\/update-install',\{method:'POST',headers:\{'X-RCRD-Request':'1'\}\}\)/);
   assert.match(client, /closest\('\[data-check-updates\]'\)/);
   const css = fs.readFileSync(path.join(root, 'distinction.css'), 'utf8');
-  assert.match(css, /\.update-release-link\[hidden\]\{display:none\}/);
+  assert.match(css, /\.update-dialog-actions \[hidden\]\{display:none\}/);
 });
 
-test('update instructions preserve credentials and local account data', () => {
-  assert.match(markup, /keep your existing <code>\.env<\/code> and <code>\.data<\/code>/);
-  assert.match(markup, /target="_blank" rel="noopener noreferrer" hidden>View release and download/);
+test('update dialog installs locally while preserving credentials and account data', () => {
+  assert.match(markup, /preserve your <code>\.env<\/code> and <code>\.data<\/code>/);
+  assert.match(markup, /target="_blank" rel="noopener noreferrer" hidden>View release notes/);
 });
 
 test('profile renewal notifications are actionable, dismissible, and periodically refreshed', () => {

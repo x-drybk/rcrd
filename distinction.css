@@ -375,7 +375,7 @@ main{width:100%;margin-left:0}
 .themed-select-list{position:absolute;max-height:none;overflow:visible}
 .home-heading-row{display:flex;align-items:center;gap:7px}
 .about-settings{grid-column:1/-1}
-.about-update-button{margin:0}.about-update-button+ p{margin-top:8px}#aboutDialog .about-update-button{padding:5px 9px;font-size:10px}.update-dialog-content{max-width:520px}.update-dialog-content h2{margin:0 0 10px}.update-dialog-content>p:not(.eyebrow){color:var(--muted);font-size:13px;line-height:1.6}.update-release-link{display:inline-block;text-decoration:none}.update-release-link[hidden]{display:none}.update-dialog-content code{overflow-wrap:anywhere}
+.about-update-button{margin:0}.about-update-button+ p{margin-top:8px}#aboutDialog .about-update-button{padding:5px 9px;font-size:10px}.update-dialog-content{max-width:520px}.update-dialog-content h2{margin:0 0 10px}.update-dialog-content>p:not(.eyebrow){color:var(--muted);font-size:13px;line-height:1.6}.update-dialog-content #updateDialogMessage{margin:0}.update-dialog-actions{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-top:14px}.update-dialog-actions[hidden],.update-dialog-actions [hidden]{display:none}.update-release-link,.update-release-link:visited{color:var(--lime);font:600 12px/1.4 'DM Sans',sans-serif;text-decoration:underline;text-underline-offset:2px;white-space:nowrap}.update-release-link:hover,.update-release-link:focus-visible{color:var(--ink)}#updateDialogMessage .update-release-link{margin-left:4px}.update-dialog-content code{overflow-wrap:anywhere}
 .about-settings .about-disclaimer{border-top:1px solid var(--line);padding-top:13px;margin-top:13px;font-style:italic}
 .spotify-toolbar .page-size-control{flex-direction:row;align-items:center;gap:7px;white-space:nowrap}
 .spotify-toolbar .page-size-control[hidden]{display:none}
@@ -383,10 +383,10 @@ main{width:100%;margin-left:0}
 #aboutDialog{width:min(390px,calc(100vw - 32px));padding:22px;border:1px solid var(--control-line)}
 #aboutDialog .settings-card{border:0;background:transparent;padding:0}
 #aboutDialog .settings-card h2{margin-right:28px}
-#aboutDialog .about-feedback{margin:14px 0;padding:12px 13px;border-radius:4px;background:#203027}
-#aboutDialog .about-feedback a{display:inline-block;color:var(--lime);font:700 11px/1.4 'DM Sans',sans-serif;text-decoration:none}
-#aboutDialog .about-feedback a:hover{text-decoration:underline}
-#aboutDialog .about-feedback p{margin:6px 0 0;color:var(--muted);font:10px/1.5 'DM Sans',sans-serif}
+.about-feedback{width:min(100%,520px);margin:14px 0;padding:12px 13px;border-radius:4px;background:#203027}
+.about-feedback a{display:inline-block;color:var(--lime);font:700 11px/1.4 'DM Sans',sans-serif;text-decoration:none}
+.about-feedback a:hover{text-decoration:underline}
+.about-feedback p{margin:6px 0 0;color:var(--muted);font:10px/1.5 'DM Sans',sans-serif}
 #restartConfirmDialog{width:min(420px,calc(100vw - 32px));max-width:calc(100vw - 32px);padding:24px;background:#192920;color:var(--ink);border:1px solid #6c8a71;box-shadow:0 20px 55px #0009}
 #restartConfirmDialog::backdrop{background:#06110bc9}
 #restartConfirmDialog h2{margin:5px 0 10px;font-size:24px}

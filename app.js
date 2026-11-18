@@ -294,21 +294,51 @@ async function checkForRcrdUpdates(){
   const dialog=document.querySelector('#updateDialog');
   const title=document.querySelector('#updateDialogTitle');
   const message=document.querySelector('#updateDialogMessage');
+  const actions=document.querySelector('#updateDialogActions');
   const link=document.querySelector('#updateReleaseLink');
+  const install=document.querySelector('#updateInstallButton');
   const help=document.querySelector('#updateInstallHelp');
   const buttons=[...document.querySelectorAll('[data-check-updates]')];
-  title.textContent='Checking for updates…';message.textContent='Contacting GitHub for the latest published release.';link.hidden=true;help.hidden=true;buttons.forEach(button=>button.disabled=true);
+  actions.append(link);actions.hidden=true;title.textContent='Checking for updates…';message.textContent='Contacting GitHub for the latest published release.';link.hidden=true;install.hidden=true;help.hidden=true;buttons.forEach(button=>button.disabled=true);
   if(!dialog.open)dialog.showModal();
   try{
     const response=await fetch('/api/update-check',{cache:'no-store'});const data=await response.json();
     if(!response.ok)throw new Error(data.error||'Could not check for updates.');
     link.href=data.releaseUrl;
-    if(data.updateAvailable){title.textContent=`RCRD ${data.latestVersion} is available`;message.textContent=`You have version ${data.currentVersion}. Review the release notes before downloading the update.`;link.textContent='View release and download ↗';link.hidden=false;help.hidden=false}
-    else{title.textContent='RCRD is up to date';message.textContent=`Version ${data.currentVersion} is the latest published release.`;link.textContent='View release notes ↗';link.hidden=false}
+    if(data.updateAvailable){title.textContent=`RCRD ${data.latestVersion} is available`;message.textContent=data.installAvailable?`You have version ${data.currentVersion}. Install the verified release here, or review its notes first.`:`You have version ${data.currentVersion}. This release has no verified ZIP for automatic installation.`;link.textContent='View release notes ↗';link.hidden=false;actions.hidden=false;install.hidden=!data.installAvailable;help.hidden=!data.installAvailable}
+    else{title.textContent='RCRD is up to date';message.textContent=`Version ${data.currentVersion} is current. `;link.textContent='View release notes ↗';link.hidden=false;message.append(link)}
   }catch(error){title.textContent='Update check unavailable';message.textContent=error.message||'Could not check GitHub for updates.'}
   finally{buttons.forEach(button=>button.disabled=false)}
 }
 document.addEventListener('click',event=>{if(event.target.closest('[data-check-updates]'))checkForRcrdUpdates()});
+let updateInstallBusy=false;
+async function installRcrdUpdate(){
+  if(updateInstallBusy)return;
+  updateInstallBusy=true;
+  const button=document.querySelector('#updateInstallButton');const title=document.querySelector('#updateDialogTitle');const message=document.querySelector('#updateDialogMessage');
+  button.disabled=true;message.textContent='Downloading and verifying the release ZIP…';
+  try{
+    const response=await fetch('/api/update-install',{method:'POST',headers:{'X-RCRD-Request':'1'}});
+    const data=await response.json();
+    if(!response.ok||data.ok!==true)throw new Error(data.error||'Could not install the update.');
+    title.textContent=`Installing RCRD ${data.version}…`;message.textContent='Replacing application files and restarting RCRD. This may take a moment.';
+    const deadline=Date.now()+60000;
+    while(Date.now()<deadline){
+      try{
+        const healthResponse=await fetch('/api/health',{cache:'no-store',signal:AbortSignal.timeout(2500)});const health=await healthResponse.json();
+        if(healthResponse.ok&&health.app==='rcrd'&&health.pid!==data.previousPid){
+          const statusResponse=await fetch('/api/update-status',{cache:'no-store',signal:AbortSignal.timeout(2500)});const status=await statusResponse.json();
+          if(status.status==='failed'){const failure=new Error(status.message||'The update failed. RCRD restored the previous version.');failure.updateFailed=true;throw failure}
+          if(status.status==='complete'&&health.version===data.version){message.textContent='Update installed. Reloading RCRD…';try{sessionStorage.setItem('rcrd-update-completed',data.version)}catch{}location.reload();return}
+        }
+      }catch(error){if(error.updateFailed)throw error}
+      await new Promise(resolve=>setTimeout(resolve,1000));
+    }
+    throw new Error('RCRD did not return after the update. Open the RCRD launcher to see its status.');
+  }catch(error){title.textContent='Update could not finish';message.textContent=error.message||'The update failed.';button.disabled=false}
+  finally{updateInstallBusy=false}
+}
+document.querySelector('#updateInstallButton').addEventListener('click',installRcrdUpdate);
 function handleProfileMenuKeydown(event){
   if(event.key!=='Escape')return;
   const open=profileMenus.find(menu=>menu.open);
@@ -342,6 +372,7 @@ function restoreRestartFeedback(){
   }catch{}
 }
 restoreRestartFeedback();
+try{const installed=sessionStorage.getItem('rcrd-update-completed');sessionStorage.removeItem('rcrd-update-completed');if(/^\d+\.\d+\.\d+/.test(installed||''))showToast(`RCRD ${installed} installed successfully.`)}catch{}
 
 function syncAlbumTrackLikedStatus(uri,saved,includeChecking=false){
   for(const button of document.querySelectorAll('.collection-lookup-results .spotify-track-liked')){

@@ -24,7 +24,7 @@ function backend({ platform = 'win32', runtime = { pid: 100, port: 3000, root: p
     },
     spawn: (...args) => { calls.push(args); const child = new EventEmitter(); child.pid = 101; child.unref = () => {}; child.kill = () => { killed++; }; queueMicrotask(() => { if (fail) child.emit('error', Object.assign(new Error('synthetic'), { code: failureCode })); else if (helperExitCode !== undefined) child.emit('exit', helperExitCode); else markers.set(path.join(runtimeDirectory, `restart-ready-${args[1][3]}`), invalidReady ? 'invalid' : args[1][3]); }); return child; }
   });
-  vm.runInContext(`let restartPending=false;${definition(serverSource, 'requestServerRestart')}`, context);
+  vm.runInContext(`let restartPending=false,updatePending=false;${definition(serverSource, 'requestServerRestart')}`, context);
   return { calls, markers, killed: () => killed, run: () => vm.runInContext('requestServerRestart()', context) };
 }
 test('restart uses a ready hidden Node helper for the current PID, rejecting duplicate requests', async () => {
@@ -36,7 +36,7 @@ test('restart uses a ready hidden Node helper for the current PID, rejecting dup
   assert.equal(h.calls[0][2].windowsHide, true);
   assert.equal(h.calls[0][2].stdio, 'ignore');
   assert.equal(h.markers.size, 0, 'readiness marker is removed');
-  await assert.rejects(h.run(), /already restarting/);
+  await assert.rejects(h.run(), /already updating or restarting/);
 });
 test('restart refuses unsupported systems and mismatched ownership without spawning', async () => {
   for (const options of [{ platform: 'linux' }, { runtime: { pid: 101, port: 3000, root: '/synthetic' } }, { runtime: null }]) {

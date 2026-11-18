@@ -10,6 +10,7 @@ loadEnv();
 const root = __dirname;
 const appVersion = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8')).version;
 const githubLatestReleaseApi = 'https://api.github.com/repos/x-drybk/rcrd/releases/latest';
+const maxUpdateArchiveBytes = 256 * 1024 * 1024;
 const bindHost = '127.0.0.1';
 const port = Number(process.env.PORT || 3000);
 if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('PORT must be a valid TCP port.');
@@ -329,6 +330,53 @@ async function providerResponse(url, options = {}) {
     }
     return { response, text };
   } finally { clearTimeout(timeout); externalSignal?.removeEventListener('abort', cancel); }
+}
+function updateReleaseVersion(release) {
+  const version = typeof release?.tag_name === 'string' ? release.tag_name.trim().replace(/^v/i, '') : '';
+  if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(version)) throw new Error('The latest GitHub release has an invalid version.');
+  if (typeof release.html_url !== 'string' || !/^https:\/\/github\.com\/x-drybk\/rcrd\/releases\//.test(release.html_url)) throw new Error('The latest GitHub release has an invalid address.');
+  return version;
+}
+function newerVersion(current, latest) {
+  const before = current.split(/[+-]/, 1)[0].split('.').map(Number);
+  const after = latest.split(/[+-]/, 1)[0].split('.').map(Number);
+  return after.some((value, index) => value > before[index] && after.slice(0, index).every((prior, priorIndex) => prior === before[priorIndex]));
+}
+function updateReleaseAsset(release, version) {
+  const name = `RCRD-${version}.zip`;
+  const asset = Array.isArray(release.assets) ? release.assets.find(item => item?.name === name && item.state === 'uploaded') : null;
+  if (!asset || !Number.isSafeInteger(asset.size) || asset.size < 1024 || asset.size > maxUpdateArchiveBytes || !/^sha256:[a-fA-F0-9]{64}$/.test(asset.digest || '')) return null;
+  const expected = `https://github.com/x-drybk/rcrd/releases/download/${encodeURIComponent(release.tag_name)}/${name}`;
+  if (asset.browser_download_url !== expected) return null;
+  return { url: expected, size: asset.size, sha256: asset.digest.slice(7).toLowerCase() };
+}
+async function latestRcrdRelease() {
+  const { response, text } = await providerResponse(githubLatestReleaseApi, { redirect: 'error', headers: { Accept: 'application/vnd.github+json', 'User-Agent': `RCRD/${appVersion}`, 'X-GitHub-Api-Version': '2022-11-28' } });
+  if (!response.ok) throw new Error(response.status === 404 ? 'No published RCRD release was found.' : 'GitHub could not check for updates right now.');
+  const release = JSON.parse(text); const version = updateReleaseVersion(release);
+  return { release, version, asset: updateReleaseAsset(release, version) };
+}
+async function downloadRcrdUpdate(asset, destination) {
+  const controller = new AbortController(); const timeout = setTimeout(() => controller.abort(), 180000);
+  let url = asset.url; let file;
+  try {
+    for (let redirects = 0; redirects < 4; redirects++) {
+      const parsed = new URL(url);
+      if (parsed.protocol !== 'https:' || !['github.com', 'release-assets.githubusercontent.com', 'objects.githubusercontent.com'].includes(parsed.hostname)) throw new Error('GitHub returned an unsafe update address.');
+      const response = await fetch(url, { redirect: 'manual', signal: controller.signal, headers: parsed.hostname === 'github.com' ? { 'User-Agent': `RCRD/${appVersion}` } : {} });
+      if ([301, 302, 303, 307, 308].includes(response.status)) { const location = response.headers.get('location'); if (!location) throw new Error('GitHub did not provide the release download.'); url = new URL(location, url).href; continue; }
+      if (!response.ok || !response.body?.getReader) throw new Error('The release ZIP could not be downloaded.');
+      const length = Number(response.headers.get('content-length'));
+      if (length > asset.size || length > maxUpdateArchiveBytes) throw new Error('The release ZIP is larger than expected.');
+      file = fs.openSync(destination, 'wx', 0o600);
+      const reader = response.body.getReader(); const hash = crypto.createHash('sha256'); let size = 0;
+      while (true) { const { done, value } = await reader.read(); if (done) break; size += value.byteLength; if (size > asset.size || size > maxUpdateArchiveBytes) { await reader.cancel(); throw new Error('The release ZIP is larger than expected.'); } hash.update(value); for (let offset = 0; offset < value.byteLength;) { const written = fs.writeSync(file, value, offset, value.byteLength - offset); if (written < 1) throw new Error('Could not save the release ZIP.'); offset += written; } }
+      fs.closeSync(file); file = null;
+      if (size !== asset.size || hash.digest('hex') !== asset.sha256) throw new Error('The release ZIP failed its size or SHA-256 check.');
+      return;
+    }
+    throw new Error('GitHub redirected the release download too many times.');
+  } finally { clearTimeout(timeout); if (file !== undefined && file !== null) fs.closeSync(file); }
 }
 let discogsRateLimitedUntil = 0;
 let discogsRateLimitBackoffSeconds = 0;
@@ -1143,9 +1191,56 @@ function allowedMutation(request, pathname) {
 }
 
 let restartPending = false;
+let updatePending = false;
+const updateStatusFile = path.join(runtimeDirectory, 'update-status.json');
+function writeUpdateStatus(status, version, message = '') {
+  const temporary = `${updateStatusFile}.${random()}.tmp`;
+  try { fs.writeFileSync(temporary, JSON.stringify({ status, version, message, updatedAt: Date.now() }), { mode: 0o600 }); fs.renameSync(temporary, updateStatusFile); }
+  finally { try { fs.unlinkSync(temporary); } catch {} }
+}
+async function requestServerUpdate() {
+  if (process.platform !== 'win32') throw Object.assign(new Error('Automatic updates are available on Windows only.'), { status: 503 });
+  if (updatePending || restartPending) throw Object.assign(new Error('RCRD is already updating or restarting.'), { status: 409 });
+  let runtime;
+  try { runtime = JSON.parse(fs.readFileSync(pidFile, 'utf8')); } catch {}
+  if (!runtime || runtime.pid !== process.pid || runtime.port !== port || path.resolve(runtime.root || '') !== root) throw Object.assign(new Error('Launch RCRD with its Windows launcher to enable automatic updates.'), { status: 503 });
+  updatePending = true;
+  let staging; let child; let readyFile;
+  try {
+    const { version, asset } = await latestRcrdRelease();
+    if (!newerVersion(appVersion, version)) throw Object.assign(new Error('RCRD is already up to date.'), { status: 409 });
+    if (!asset) throw Object.assign(new Error('This GitHub release has no verified RCRD ZIP for automatic installation.'), { status: 409 });
+    staging = path.join(runtimeDirectory, 'update-staging', random());
+    fs.mkdirSync(staging, { recursive: true, mode: 0o700 });
+    const archive = path.join(staging, 'release.zip');
+    writeUpdateStatus('downloading', version);
+    await downloadRcrdUpdate(asset, archive);
+    writeUpdateStatus('installing', version);
+    const handoffId = random(); readyFile = path.join(runtimeDirectory, `update-ready-${handoffId}`);
+    child = spawn('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', path.join(root, 'scripts', 'Update-RCRD.ps1'), '-ProjectRoot', root, '-ArchivePath', archive, '-Version', version, '-ExpectedSha256', asset.sha256, '-ParentPid', String(process.pid), '-Port', String(port), '-NodeExe', process.execPath, '-HandoffId', handoffId], { cwd: root, detached: true, windowsHide: true, stdio: 'ignore' });
+    await new Promise((resolve, reject) => {
+      const deadline = Date.now() + 5000; let settled = false;
+      const finish = error => { if (settled) return; settled = true; clearInterval(poll); child.off('error', onError); child.off('exit', onExit); if (error) reject(error); else resolve(); };
+      const onError = error => finish(error);
+      const onExit = () => finish(new Error('Update helper exited before installation.'));
+      const poll = setInterval(() => { try { if (fs.readFileSync(readyFile, 'utf8') === handoffId) return finish(); return finish(new Error('Invalid update handoff.')); } catch (error) { if (error.code !== 'ENOENT') return finish(error); } if (Date.now() >= deadline) finish(new Error('Update helper did not become ready.')); }, 50);
+      child.once('error', onError); child.once('exit', onExit);
+    });
+    child.unref();
+    try { fs.unlinkSync(readyFile); } catch {}
+    return version;
+  } catch (error) {
+    updatePending = false;
+    if (child?.pid) { try { child.kill(); } catch {} }
+    if (readyFile) { try { fs.unlinkSync(readyFile); } catch {} }
+    if (staging) { try { fs.rmSync(staging, { recursive: true, force: true }); } catch {} }
+    try { writeUpdateStatus('failed', '', error.message); } catch {}
+    throw error;
+  }
+}
 async function requestServerRestart() {
   if (process.platform !== 'win32') throw Object.assign(new Error('Settings restart is available on Windows only.'), { status: 503 });
-  if (restartPending) throw Object.assign(new Error('RCRD is already restarting.'), { status: 409 });
+  if (restartPending || updatePending) throw Object.assign(new Error('RCRD is already updating or restarting.'), { status: 409 });
   let runtime;
   try { runtime = JSON.parse(fs.readFileSync(pidFile, 'utf8')); } catch {}
   if (!runtime || runtime.pid !== process.pid || runtime.port !== port || path.resolve(runtime.root || '') !== root) {
@@ -1214,20 +1309,22 @@ async function handle(request, response) {
     if (request.method === 'GET' && url.pathname === '/api/health') return send(response, 200, { ok: true, app: 'rcrd', version: appVersion, pid: process.pid });
     if (request.method === 'GET' && url.pathname === '/api/update-check') {
       try {
-        const { response: releaseResponse, text } = await providerResponse(githubLatestReleaseApi, { redirect: 'error', headers: { Accept: 'application/vnd.github+json', 'User-Agent': `RCRD/${appVersion}`, 'X-GitHub-Api-Version': '2022-11-28' } });
-        if (!releaseResponse.ok) throw new Error(releaseResponse.status === 404 ? 'No published RCRD release was found.' : 'GitHub could not check for updates right now.');
-        const release = JSON.parse(text);
-        const latestVersion = typeof release?.tag_name === 'string' ? release.tag_name.trim().replace(/^v/i, '') : '';
-        if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(latestVersion)) throw new Error('The latest GitHub release has an invalid version.');
-        const releaseUrl = typeof release.html_url === 'string' ? release.html_url : '';
-        if (!/^https:\/\/github\.com\/x-drybk\/rcrd\/releases\//.test(releaseUrl)) throw new Error('The latest GitHub release has an invalid address.');
-        const parts = version => version.split(/[+-]/, 1)[0].split('.').map(Number);
-        const current = parts(appVersion); const latest = parts(latestVersion);
-        const updateAvailable = latest.some((value, index) => value !== current[index] && latest.slice(0, index).every((prior, priorIndex) => prior === current[priorIndex]) && value > current[index]);
-        return send(response, 200, { currentVersion: appVersion, latestVersion, updateAvailable, releaseUrl, publishedAt: typeof release.published_at === 'string' ? release.published_at : null });
+        const { release, version, asset } = await latestRcrdRelease();
+        return send(response, 200, { currentVersion: appVersion, latestVersion: version, updateAvailable: newerVersion(appVersion, version), installAvailable: Boolean(asset) && process.platform === 'win32', releaseUrl: release.html_url, publishedAt: typeof release.published_at === 'string' ? release.published_at : null });
       } catch (error) {
         return send(response, 502, { error: error instanceof SyntaxError ? 'GitHub returned an invalid update response.' : error.message });
       }
+    }
+    if (request.method === 'GET' && url.pathname === '/api/update-status') {
+      if (!sessionFor(request)) return send(response, 401, { error: 'Open RCRD before checking update status.' });
+      try { const status = JSON.parse(fs.readFileSync(updateStatusFile, 'utf8')); return send(response, 200, status); }
+      catch { return send(response, 200, { status: 'idle' }); }
+    }
+    if (request.method === 'POST' && url.pathname === '/api/update-install') {
+      if (request.headers.origin !== url.origin) return send(response, 403, { error: 'Request not allowed' });
+      if (!sessionFor(request)) return send(response, 401, { error: 'Open RCRD before installing an update.' });
+      try { const version = await requestServerUpdate(); response.once('finish', shutdown); return send(response, 202, { ok: true, version, previousPid: process.pid }); }
+      catch (error) { return send(response, error.status === 409 ? 409 : 503, { error: error.message }); }
     }
     if (request.method === 'GET' && url.pathname === '/genius-embed') {
       const id = url.searchParams.get('id');

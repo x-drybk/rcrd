@@ -21,7 +21,7 @@ test('update check compares the package version with a validated GitHub release'
   };
   const response = await request('/api/update-check');
   assert.equal(response.status, 200);
-  assert.deepEqual(JSON.parse(response.body), { currentVersion: packageVersion, latestVersion: '9.4.1', updateAvailable: true, releaseUrl: 'https://github.com/x-drybk/rcrd/releases/tag/v9.4.1', publishedAt: '2026-11-16T12:00:00Z' });
+  assert.deepEqual(JSON.parse(response.body), { currentVersion: packageVersion, latestVersion: '9.4.1', updateAvailable: true, installAvailable: false, releaseUrl: 'https://github.com/x-drybk/rcrd/releases/tag/v9.4.1', publishedAt: '2026-11-16T12:00:00Z' });
   assert.equal(state.externalCalls, 1);
 }));
 
@@ -31,6 +31,39 @@ test('update check rejects malformed release metadata and does not expose it', (
   assert.equal(response.status, 502);
   assert.match(JSON.parse(response.body).error, /invalid version/);
   assert.doesNotMatch(response.body, /do-not-return|example\.test/);
+}));
+
+test('automatic update is offered only for a versioned GitHub ZIP with a valid digest', () => fixture(async ({ request, state, port }) => {
+  const base = { tag_name: 'v9.4.1', html_url: 'https://github.com/x-drybk/rcrd/releases/tag/v9.4.1', assets: [{ name: 'RCRD-9.4.1.zip', state: 'uploaded', size: 4096, digest: `sha256:${'a'.repeat(64)}`, browser_download_url: 'https://github.com/x-drybk/rcrd/releases/download/v9.4.1/RCRD-9.4.1.zip' }] };
+  state.providerFetch = async () => providerJson(base);
+  assert.equal(JSON.parse((await request('/api/update-check')).body).installAvailable, true);
+  base.assets[0].browser_download_url = 'https://example.test/unsafe.zip';
+  assert.equal(JSON.parse((await request('/api/update-check')).body).installAvailable, false);
+  base.assets[0].browser_download_url = 'https://github.com/x-drybk/rcrd/releases/download/v9.4.1/RCRD-9.4.1.zip';
+  base.assets[0].digest = 'sha256:invalid';
+  assert.equal(JSON.parse((await request('/api/update-check')).body).installAvailable, false);
+  assert.equal((await request('/api/update-install', { method: 'POST', headers: { Cookie: `rcrd_session=${sessionId}`, 'X-RCRD-Request': '1' } })).status, 403);
+  assert.equal((await request('/api/update-install', { method: 'POST', headers: { Origin: `http://127.0.0.1:${port}`, 'X-RCRD-Request': '1' } })).status, 401);
+  assert.equal((await request('/api/update-install', { method: 'POST', headers: { Cookie: `rcrd_session=${sessionId}`, Origin: `http://127.0.0.1:${port}`, 'X-RCRD-Request': '1' } })).status, 503, 'an unmanaged server cannot replace its own files');
+}));
+
+test('release download enforces GitHub redirects, exact size, and SHA-256 before installation', () => fixture(async ({ state, runtime, testDownloadRcrdUpdate }) => {
+  const content = Buffer.from('synthetic release archive');
+  const asset = { url: 'https://github.com/x-drybk/rcrd/releases/download/v9.4.1/RCRD-9.4.1.zip', size: content.length, sha256: crypto.createHash('sha256').update(content).digest('hex') };
+  const destination = path.join(runtime, 'download.zip');
+  state.providerFetch = async url => {
+    if (url.startsWith('https://github.com/')) return new Response(null, { status: 302, headers: { Location: 'https://release-assets.githubusercontent.com/synthetic' } });
+    assert.equal(url, 'https://release-assets.githubusercontent.com/synthetic');
+    return new Response(content, { status: 200 });
+  };
+  await testDownloadRcrdUpdate(asset, destination);
+  assert.deepEqual(fs.readFileSync(destination), content);
+  fs.unlinkSync(destination);
+  await assert.rejects(testDownloadRcrdUpdate({ ...asset, sha256: '0'.repeat(64) }, destination), /SHA-256/);
+  fs.unlinkSync(destination);
+  state.providerFetch = async () => new Response(null, { status: 302, headers: { Location: 'https://example.test/unsafe.zip' } });
+  await assert.rejects(testDownloadRcrdUpdate(asset, destination), /unsafe update address/);
+  assert.equal(fs.existsSync(destination), false);
 }));
 
 test('Spotify renewal notifications log only lifecycle events without account credentials', () => fixture(async ({ request, runtime, testSessions }) => {
@@ -122,7 +155,7 @@ async function fixture(run, { spotifyCacheUsers = {}, spotifyScope = '', spotify
   } : require(name);
   const testSetTimeout = (callback, delay) => state.timeoutImmediately && delay === 20000 ? Promise.resolve().then(callback) : setTimeout(callback, delay);
   try {
-    vm.runInNewContext(`${source}\nmodule.exports.bindHost = bindHost; module.exports.testSessions = sessions; module.exports.testInvalidateLibrary = invalidateSpotifyLibrary; module.exports.testSpotifyAccess = spotifyAccess;`, { require: testRequire, module, __dirname: directory, process: fakeProcess, Buffer, URL, URLSearchParams, AbortController, setTimeout: testSetTimeout, clearTimeout, console: { error() {}, log() {} }, fetch: async (url, options) => { state.externalCalls++; return state.providerFetch(url, options); } }, { filename: 'synthetic/server.js' });
+    vm.runInNewContext(`${source}\nmodule.exports.bindHost = bindHost; module.exports.testSessions = sessions; module.exports.testInvalidateLibrary = invalidateSpotifyLibrary; module.exports.testSpotifyAccess = spotifyAccess; module.exports.testDownloadRcrdUpdate = downloadRcrdUpdate;`, { require: testRequire, module, __dirname: directory, process: fakeProcess, Buffer, URL, URLSearchParams, AbortController, setTimeout: testSetTimeout, clearTimeout, console: { error() {}, log() {} }, fetch: async (url, options) => { state.externalCalls++; return state.providerFetch(url, options); } }, { filename: 'synthetic/server.js' });
   } catch (error) {
     fs.rmSync(directory, { recursive: true, force: true });
     throw error;
@@ -141,7 +174,7 @@ async function fixture(run, { spotifyCacheUsers = {}, spotifyScope = '', spotify
       outgoing.end(body);
     });
   }
-  try { await run({ request, state, port, runtime, key, bindHost: module.exports.bindHost, testSessions: module.exports.testSessions, testInvalidateLibrary: module.exports.testInvalidateLibrary, testSpotifyAccess: module.exports.testSpotifyAccess }); }
+  try { await run({ request, state, port, runtime, key, bindHost: module.exports.bindHost, testSessions: module.exports.testSessions, testInvalidateLibrary: module.exports.testInvalidateLibrary, testSpotifyAccess: module.exports.testSpotifyAccess, testDownloadRcrdUpdate: module.exports.testDownloadRcrdUpdate }); }
   finally {
     await new Promise(resolve => server.close(resolve));
     const target = path.resolve(directory);
