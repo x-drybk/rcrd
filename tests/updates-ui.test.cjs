@@ -7,6 +7,8 @@ const vm = require('node:vm');
 const root = path.join(__dirname, '..');
 const markup = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
 const client = fs.readFileSync(path.join(root, 'app.js'), 'utf8');
+const currentVersion = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8')).version;
+const updateVersion = currentVersion.replace(/(\d+)$/, (_, patch) => String(Number(patch) + 1));
 
 function updateUiFixture(responses) {
   const start = client.indexOf('async function installRcrdUpdate(){');
@@ -47,8 +49,8 @@ test('update dialog installs locally while preserving credentials and account da
 
 test('update UI accepts a restarted server at the requested version without a persisted anonymous session', async () => {
   const ui = updateUiFixture([
-    { body: { ok: true, version: '1.3.42', previousPid: 101 } },
-    { body: { app: 'rcrd', version: '1.3.42', pid: 202 } }
+    { body: { ok: true, version: updateVersion, previousPid: 101 } },
+    { body: { app: 'rcrd', version: updateVersion, pid: 202 } }
   ]);
   await ui.run();
   assert.deepEqual(ui.requests, ['/api/update-install', '/api/health']);
@@ -57,8 +59,8 @@ test('update UI accepts a restarted server at the requested version without a pe
 
 test('update UI reports rollback when anonymous update status is unavailable', async () => {
   const ui = updateUiFixture([
-    { body: { ok: true, version: '1.3.42', previousPid: 101 } },
-    { body: { app: 'rcrd', version: '1.3.41', pid: 202 } },
+    { body: { ok: true, version: updateVersion, previousPid: 101 } },
+    { body: { app: 'rcrd', version: currentVersion, pid: 202 } },
     { ok: false, body: { error: 'Open RCRD before checking update status.' } }
   ]);
   await ui.run();
