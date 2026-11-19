@@ -32,12 +32,12 @@ function harness(fetch = async () => ({ ok: true, json: async () => ({}) }), ext
       setAttribute(name, value) { this.attributes[name] = String(value); },
       getAttribute(name) { return this.attributes[name]; },
       replaceChildren() { this.innerHTML = ''; this.children = []; },
-      append(...children) { this.children.push(...children); }, close() { this.open = false; }
+      append(...children) { this.children.push(...children); }, close() { this.open = false; }, showModal() { this.open = true; }, focus() {}
     });
     return nodes.get(selector);
   };
   const context = vm.createContext({
-    document: { querySelector: node, querySelectorAll: selector => selector === '#previousButton,#nextButton' || selector === '#previousButton,#nextButton,#playButton' ? selector.split(',').map(node) : [], createElement: tag => ({ tag, textContent: '', children: [], append(...children) { this.children.push(...children); } }) },
+    document: { querySelector: node, querySelectorAll: selector => selector === '#previousButton,#nextButton' || selector === '#previousButton,#nextButton,#playButton' ? selector.split(',').map(node) : [], createElement: tag => ({ tag, dataset: {}, textContent: '', children: [], append(...children) { this.children.push(...children); } }) },
     fetch, URL, URLSearchParams, AbortController, performance: { now: () => Date.now() }, clearInterval() {}, setInterval() { return 1; }, setTimeout() { return 1; }, clearTimeout() {},
     escapeHtml: value => String(value), safeImageUrl: () => '',
     setSidebarPlaylistOptions() {},
@@ -51,7 +51,7 @@ function harness(fetch = async () => ({ ok: true, json: async () => ({}) }), ext
     spotifyLibraryAlbums=[],spotifySavedAlbums=[],spotifyLibraryTracks=[],spotifyLibraryPlaybackRecords=[],spotifyHomeRecommendations=[],spotifyTopAlbums=[],spotifyTopRequest=null,spotifyCanReadTop=false,homeDiscoveryMode='recent',
     spotifyLibraryLoaded=false,spotifySavedLibraryLoaded=false,spotifyPlaylistPreviewState=null,spotifyLibraryPromise=null,spotifyLibraryError='',spotifyTrackUri=null,
     spotifyLibraryProgressTimer=null,spotifyLibraryProgressBusy=false,spotifyLibraryLastUpdated=0,spotifyLibraryLastUpdatedGeneration=-1,spotifyLibrarySyncSource='live',spotifyNoticeTimer=null,
-    spotifyCanModifyLibrary=false,likedStatus=null,likedCheckPending=false,likedRequestRevision=0,
+    spotifyCanModifyLibrary=false,spotifyCanModifyPrivatePlaylists=null,likedStatus=null,likedCheckPending=false,likedRequestRevision=0,
     likedMutationPending=false,spotifyLibraryRevision=0,spotifyLibraryNeedsRefresh=false,
     spotifyDeviceId=null,spotifyTargetDeviceId=null,spotifyPlayerTransfer=null,spotifyTargetSupportsVolume=true,spotifyDeviceRequestRevision=0,spotifyDeviceRefreshTimer=null,spotifyDeviceRefreshBusy=0,spotifyDeviceRefreshEnabled=false,availableSpotifyDevices=new Map(),spotifySyncTimer=null,spotifyProgressTimer=null,spotifyPlayerReadyTimer=null,spotifyPlayer=null,spotifyPlayerConnectFailed=false,spotifyDurationMs=0,spotifyPositionMs=0,spotifyProgressUpdatedAt=0,spotifyPlaybackStateRevision=0,spotifySdkStateRevision=0,
     spotifyHealthConnection=null,spotifyCanStream=null,spotifyPlayerState='waiting',spotifyPlayerIssue='',spotifyActiveDevice='Not checked',spotifyPlayerAuthRecoveryAttempted=false,spotifyPlaybackSyncGeneration=null,spotifyPlaybackSyncAgain=false,ambientLastActivity=Date.now(),
@@ -72,7 +72,7 @@ function harness(fetch = async () => ({ ok: true, json: async () => ({}) }), ext
   for (const name of ['artistSearchButton', 'renderPlayerLiked', 'syncAlbumTrackLikedStatus', 'renderAlbumTrackLiked', 'refreshCurrentTrackLikedStatus', 'syncSpotifyAlbumTrackIndicator', 'setCurrentSpotifyTrackUri', 'updateSettingsAccountAction', 'renderPlaybackHealth', 'renderVolumeControl', 'renderSpotifyConnectionStatus', 'applySpotifyActionAvailability', 'advanceSpotifyProgress', 'syncSpotifyPlaybackPolling', 'syncSpotifyDeviceRefresh', 'resetListeningHistoryUi']) {
     vm.runInContext(definition(name), context);
   }
-  for (const name of ['libraryUpdatedLabel', 'spotifySourceLabel', 'spotifySyncLabel', 'savedLibraryFreshnessNote', 'cacheTimestampLabel', 'scheduleSpotifyCatalogNoticeDismissal', 'showSpotifyLibraryNotice', 'settleSpotifyLibraryNotice', 'savedTrackDisplayKey']) vm.runInContext(definition(name), context);
+  for (const name of ['libraryUpdatedLabel', 'spotifySourceLabel', 'spotifySyncLabel', 'savedLibraryFreshnessNote', 'cacheTimestampLabel', 'scheduleSpotifyCatalogNoticeDismissal', 'showSpotifyLibraryNotice', 'settleSpotifyLibraryNotice', 'savedTrackDisplayKey', 'syncSpotifyPlaylistCount']) vm.runInContext(definition(name), context);
   return {
     node,
     load: (...names) => names.forEach(name => vm.runInContext(definition(name), context)),
@@ -100,7 +100,7 @@ test('browsing context restores only after the connected account marker matches'
 test('creating a playlist sends selected songs and opens it inside RCRD', async () => {
   const sent = []; let refreshed = 0, opened = '';
   const h = harness(async (url, options) => { sent.push({ url, options }); return { ok: true, json: async () => ({ id: 'playlist123', name: 'Road trip', url: 'https://open.spotify.com/playlist/playlist123' }) }; });
-  h.context.refreshSpotifyPlaylists = async () => { refreshed++; };
+  h.context.refreshSpotifyPlaylists = async () => { refreshed++; h.node('#spotifyPlaylistSelect').options.push({ value: 'playlist123', dataset: { playlistName: 'Road trip' }, textContent: 'Road trip (0)' }); };
   h.context.loadSpotifyPlaylist = async id => { opened = id; };
   h.node('[data-view="spotify"]').click = () => {};
   h.node('#spotifyPlaylistSelect').options = [];
@@ -113,8 +113,48 @@ test('creating a playlist sends selected songs and opens it inside RCRD', async 
   assert.equal(JSON.parse(sent[0].options.body).name, 'Road trip');
   assert.deepEqual(JSON.parse(sent[0].options.body).uris, ['spotify:track:1234567890123456789012']);
   assert.equal(refreshed, 1);
+  assert.equal(h.node('#spotifyPlaylistSelect').options[0].textContent, 'Road trip (1)');
   assert.equal(opened, 'playlist123');
   assert.equal(h.node('#spotifyCreatePlaylistDialog').open, false);
+});
+
+test('missing private playlist permission offers approval before sending a create request', async () => {
+  let requests = 0;
+  const h = harness(async () => { requests++; throw new Error('Unexpected playlist request'); });
+  h.run("let createPlaylistSongs=[{uri:'spotify:track:1234567890123456789012',name:'A song',artist:'An artist'}],createPlaylistPendingId='';spotifyCanModifyPrivatePlaylists=false;");
+  h.load('updateCreatePlaylistSubmit', 'showCreatePlaylistPermission', 'submitCreatePlaylist');
+  h.node('#spotifyCreatePlaylistName').value = 'Road trip';
+  await h.run('submitCreatePlaylist({preventDefault(){}})');
+  assert.equal(requests, 0);
+  assert.equal(h.node('#spotifyCreatePlaylistPermission').hidden, false);
+  assert.equal(h.node('#spotifyCreatePlaylistSubmit').disabled, true);
+  assert.match(markup, /id="spotifyCreatePlaylistAuthorize">Enable private playlists/);
+});
+
+test('Spotify approval restores a playlist draft only for the same verified account', async () => {
+  const saved = new Map();
+  const h = harness();
+  h.context.sessionStorage = { getItem: key => saved.get(key) || null, setItem: (key, value) => saved.set(key, value), removeItem: key => saved.delete(key) };
+  h.context.location = { search: '', href: '' };
+  h.run("let createPlaylistSongs=[{uri:'spotify:track:1234567890123456789012',name:'A song',artist:'An artist'}],createPlaylistSearchResults=[],createPlaylistSearchTimer=null,createPlaylistSearchSequence=0,createPlaylistPendingId='';spotifyAccountMarker='account-one';spotifyCanModifyPrivatePlaylists=false;");
+  h.load('updateCreatePlaylistSubmit', 'showCreatePlaylistPermission', 'authorizeCreatePlaylist', 'restoreCreatePlaylistDraft', 'renderCreatePlaylistSongs', 'renderCreatePlaylistSearchResults', 'resetCreatePlaylistUi', 'openCreatePlaylistDialog');
+  h.node('#spotifyCreatePlaylistName').value = 'Road trip';
+  await h.run('authorizeCreatePlaylist()');
+  assert.equal(h.context.location.href, '/auth/spotify/start');
+  assert.equal(JSON.parse(saved.get('rcrd-private-playlist-draft')).marker, 'account-one');
+  h.context.location.search = '?spotify=connected';
+  h.run('spotifyCanModifyPrivatePlaylists=true;createPlaylistSongs=[]');
+  h.run("restoreCreatePlaylistDraft({accountMarker:'account-one',canModifyPrivatePlaylists:true})");
+  assert.equal(h.node('#spotifyCreatePlaylistDialog').open, true);
+  assert.equal(h.node('#spotifyCreatePlaylistName').value, 'Road trip');
+  assert.equal(h.node('#spotifyCreatePlaylistCount').textContent, '1 / 100');
+  assert.equal(h.node('#spotifyCreatePlaylistSubmit').disabled, false);
+  assert.equal(saved.has('rcrd-private-playlist-draft'), false);
+  h.node('#spotifyCreatePlaylistDialog').close();
+  saved.set('rcrd-private-playlist-draft', JSON.stringify({ marker: 'account-one', savedAt: Date.now(), name: 'Private draft', songs: [] }));
+  h.run("restoreCreatePlaylistDraft({accountMarker:'account-two',canModifyPrivatePlaylists:true})");
+  assert.equal(h.node('#spotifyCreatePlaylistDialog').open, false);
+  assert.equal(saved.has('rcrd-private-playlist-draft'), false);
 });
 
 test('playlist song-add failure retries the same playlist instead of creating another', async () => {
@@ -1884,6 +1924,23 @@ test('playlist preview failure falls back to the full result without claiming pa
   assert.match(h.node('#spotifyGrid').innerHTML, /Full track/);
   assert.equal(h.node('#spotifyLibraryStatus').textContent, '1 playlist tracks');
   assert.equal(h.run('spotifyPlaylistPreviewState'), null);
+});
+
+test('a loaded playlist corrects a stale zero count in the native and sidebar dropdowns', async () => {
+  const songs = Array.from({ length: 7 }, (_, index) => ({ name: `Song ${index + 1}`, artists: [{ name: 'Artist' }], album: { name: 'Album' }, uri: `spotify:track:${index + 1}` }));
+  const h = harness(async url => ({ ok: true, json: async () => url.endsWith('&preview=1') ? { total: 0, tracks: [] } : { tracks: songs } }), { setSidebarPlaylistValue() {}, setSpotifySearchScope() {}, updateSearchContext() {} });
+  const option = { value: 'synthetic', dataset: { playlistName: 'test_playlist' }, textContent: 'test_playlist (0)' };
+  const sidebarOption = { dataset: { playlistId: 'synthetic' }, textContent: 'test_playlist (0)' };
+  h.node('#spotifyPlaylistSelect').options = [option];
+  h.node('#sidebarPlaylistTrigger').dataset.value = 'synthetic';
+  const querySelectorAll = h.context.document.querySelectorAll;
+  h.context.document.querySelectorAll = selector => selector === '#sidebarPlaylistList [role="option"]' ? [sidebarOption] : querySelectorAll(selector);
+  h.load('syncSpotifyPlaylistCount', 'renderSpotifyLibrary', 'spotifyPlaylistRecords', 'loadSpotifyPlaylist');
+  await h.run('loadSpotifyPlaylist("synthetic")');
+  assert.equal(h.node('#spotifyLibraryStatus').textContent, '7 playlist tracks');
+  assert.equal(option.textContent, 'test_playlist (7)');
+  assert.equal(sidebarOption.textContent, 'test_playlist (7)');
+  assert.equal(h.node('#sidebarPlaylistValue').textContent, 'test_playlist (7)');
 });
 
 test('a stale cached playlist is visibly labeled with its last update', async () => {

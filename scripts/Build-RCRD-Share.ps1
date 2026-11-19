@@ -29,6 +29,8 @@ $files = @(
   'scripts/Launch-RCRD-Update.cjs',
   'scripts/Update-RCRD.ps1',
   'scripts/Parse-Spotify-History.ps1',
+  'scripts/History-Event-Index.cjs',
+  'scripts/History-Transaction.cjs',
   'scripts/Start-RCRD.ps1',
   'server.js',
   'styles.css'

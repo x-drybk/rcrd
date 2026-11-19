@@ -50,7 +50,7 @@ let spotifyLibraryPlaybackRecords=[];
 let playing=false;
 let spotifyPlayer=null;let spotifyPlayerConnectFailed=false;let spotifyDeviceId=null;let spotifyTargetDeviceId=null;let spotifyPlayerTransfer=null;let spotifyTargetSupportsVolume=true;let spotifyDeviceRequestRevision=0;let spotifyDeviceRefreshTimer=null;let spotifyDeviceRefreshBusy=0;let spotifyDeviceRefreshEnabled=false;let spotifySyncTimer=null;let spotifyProgressTimer=null;let spotifyPlayerReadyTimer=null;let spotifyTrackUri=null;let spotifyDurationMs=0;let spotifyPositionMs=0;let spotifyProgressUpdatedAt=0;let spotifyPlaybackStateRevision=0;let spotifySdkStateRevision=0;let spotifySkipQueue=Promise.resolve();let spotifySkipPending=0;let spotifySkipBusy={next:0,previous:0};let spotifyToggleQueue=Promise.resolve();let spotifyTogglePending=0;let spotifyModeQueue=Promise.resolve();let spotifyPlaybackStartPending=0;let volume=uiPreferences.volume/100;let volumeBeforeMute=uiPreferences.volumeBeforeMute/100;let shuffleEnabled=false;let repeatMode='off';let spotifyHasContext=false;let shuffleRequestPending=false;let shuffleRevision=0;let repeatRequestPending=false;let repeatRevision=0;
 let spotifyHealthConnection=null;let spotifyCanStream=null;let spotifyPlayerState='waiting';let spotifyPlayerIssue='';let spotifyActiveDevice='Not checked';let availableSpotifyDevices=new Map();let spotifyPlayerAuthRecoveryAttempted=false;
-let spotifyCanModifyLibrary=false;let likedStatus=null;let likedRequestRevision=0;let likedCheckPending=false;let likedMutationPending=false;
+let spotifyCanModifyLibrary=false;let spotifyCanModifyPrivatePlaylists=null;let likedStatus=null;let likedRequestRevision=0;let likedCheckPending=false;let likedMutationPending=false;
 let spotifyMixRevision=0;let spotifyMixController=null;let spotifyMixPreview=null;
 function escapeHtml(value){return String(value??'').replace(/[&<>"']/g,character=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[character]))}
 function safeImageUrl(value){try{const parsed=new URL(value);return parsed.protocol==='https:'?parsed.href:''}catch{return ''}}
@@ -72,8 +72,9 @@ function renderPagination(id,page,total,pageSize,target,showEdges=false){
 }
 function sortRecords(items,mode,direction=['recent','year'].includes(mode)?'desc':'asc'){const records=[...items];const valueFor=(entry,field)=>{const record=entry.a||entry;const value=field==='album'?(record.album||record.title):record[field];return String(value||'').trim()};if(mode==='relevance'||(mode==='recent'&&!records.some(entry=>valueFor(entry,'addedAt'))))return direction==='asc'?records.reverse():records;return records.sort((left,right)=>{const field=mode==='recent'?'addedAt':mode;if(mode==='plays'){const count=entry=>{const record=entry.a||entry;const value=spotifyPlayCounts.get(record.uri)?.plays;return record.kind==='track'&&Number.isSafeInteger(value)&&value>0?value:null};const a=count(left),b=count(right);if(a===null)return b===null?0:1;if(b===null)return-1;return direction==='desc'?b-a:a-b}const a=valueFor(left,field);const b=valueFor(right,field);if(!a&&b)return 1;if(a&&!b)return-1;const order=a.localeCompare(b,undefined,{numeric:true,sensitivity:'base'});return direction==='desc'?-order:order})}
 function formatTagsFor(record){if(Array.isArray(record.formatTags)&&record.formatTags.length)return record.formatTags;const value=String(record.format||'').toLowerCase();const tags=[];if(/\bvinyl\b|\blp\b|\b12["″]?\b|\b10["″]?\b|\b7["″]?\b|shellac/.test(value))tags.push('vinyl');if(/\bcd\b|compact disc/.test(value))tags.push('cd');if(/cassette|\btape\b/.test(value))tags.push('cassette');return tags.length?tags:['other']}
-function renderCollection(){const matching=sortRecords(collection.map((a,index)=>({a,index})).filter(({a})=>collectionFilter==='all'||formatTagsFor(a).includes(collectionFilter)),collectionSort,document.querySelector('#collectionSortDirection').value);const pages=Math.max(1,Math.ceil(matching.length/collectionPageSize));collectionPage=Math.min(collectionPage,pages);const offset=(collectionPage-1)*collectionPageSize;const records=matching.slice(offset,offset+collectionPageSize);document.querySelector('#collectionGrid').innerHTML=records.map(({a,index})=>{const title=String(a.title||'').trim();const artist=String(a.artist||'').trim();const search=title&&title!=='Untitled release'?[title,artist==='Unknown artist'?'':artist].filter(Boolean).join(' ').slice(0,200).trim():'';const spotifyButton=search?`<button type="button" class="collection-spotify" data-title="${escapeHtml(title)}" data-artist="${escapeHtml(artist==='Unknown artist'?'':artist)}" aria-label="Find ${escapeHtml(title)} in Spotify">Find in Spotify →</button>`:'';const noteButton=a.source==='discogs'&&a.instanceId?`<button type="button" class="collection-notes-button" data-copy-instance="${a.instanceId}">${a.rcrdNotes?'Edit copy notes':'Add copy notes'}</button>`:'';const noteSummary=a.rcrdNotes?`<p class="collection-note-summary">${escapeHtml([a.rcrdNotes.condition,a.rcrdNotes.location,a.rcrdNotes.pricePaid,a.rcrdNotes.note].filter(Boolean).join(' · ').slice(0,180))}</p>`:'';return `<article class="collection-card" data-title="${escapeHtml(`${a.title} ${a.artist}`.toLowerCase())}" data-format="${escapeHtml(formatTagsFor(a).join(' '))}">${cover(a)}<div class="album-meta">${a.source==='discogs'?'':`<button class="remove-record" data-list="collection" data-index="${index}" aria-label="Remove ${escapeHtml(a.title)} from collection">×</button>`}<h3>${escapeHtml(a.title)}</h3><p>${artistSearchButton(a.artist,'discogs')} · ${escapeHtml(a.year)}</p>${a.source==='discogs'?'':`<div class="value">EST. VALUE ${a.price}</div>`}${spotifyButton}${noteButton}${noteSummary}${a.source==='discogs'?discogsDataCredit(a):''}</div></article>`}).join('')||`<p class="empty-state">${collectionFilter==='all'?'Your Discogs collection is ready for its first record.':`No ${escapeHtml(collectionFilter)} records were found.`}</p>`;renderPagination('collectionPagination',collectionPage,matching.length,collectionPageSize,'collection')}
-function renderWantlist(){const ordered=sortRecords(wantlist.map((a,index)=>({a,index})),wantlistSort,document.querySelector('#wantlistSortDirection').value);const pages=Math.max(1,Math.ceil(ordered.length/wantlistPageSize));wantlistPage=Math.min(wantlistPage,pages);const offset=(wantlistPage-1)*wantlistPageSize;const records=ordered.slice(offset,offset+wantlistPageSize);document.querySelector('#wantlistGrid').innerHTML=records.map(({a,index})=>{const releaseId=Number(a.releaseId);const releaseLink=a.source==='discogs'&&Number.isSafeInteger(releaseId)&&releaseId>0?`<a class="wantlist-shop" href="https://www.discogs.com/release/${releaseId}" target="_blank" rel="noopener noreferrer">Shop on Discogs ↗</a>`:'';return `<article class="want-card" data-title="${escapeHtml(`${a.title} ${a.artist}`.toLowerCase())}">${cover(a)}<div><h3>${escapeHtml(a.title)}</h3><p>${artistSearchButton(a.artist,'discogs')} · ${escapeHtml(a.year)}</p><button class="find-listing" data-album="${escapeHtml(`${a.artist} ${a.title}`)}">Find editions →</button>${releaseLink}${a.source==='discogs'?discogsDataCredit(a):''}${a.source==='discogs'?'':`<button class="remove-record secondary-action" data-list="wantlist" data-index="${index}">Remove</button>`}</div></article>`}).join('')||'<p class="empty-state">Your Discogs wantlist is clear.</p>';renderPagination('wantlistPagination',wantlistPage,ordered.length,wantlistPageSize,'wantlist')}
+function renderCollection(){const matching=sortRecords(collection.map((a,index)=>({a,index})).filter(({a})=>collectionFilter==='all'||formatTagsFor(a).includes(collectionFilter)),collectionSort,document.querySelector('#collectionSortDirection').value);const pages=Math.max(1,Math.ceil(matching.length/collectionPageSize));collectionPage=Math.min(collectionPage,pages);const offset=(collectionPage-1)*collectionPageSize;const records=matching.slice(offset,offset+collectionPageSize);document.querySelector('#collectionGrid').innerHTML=records.map(({a,index})=>{const title=String(a.title||'').trim();const artist=String(a.artist||'').trim();const search=title&&title!=='Untitled release'?[title,artist==='Unknown artist'?'':artist].filter(Boolean).join(' ').slice(0,200).trim():'';const spotifyButton=search?`<button type="button" class="collection-spotify" data-title="${escapeHtml(title)}" data-artist="${escapeHtml(artist==='Unknown artist'?'':artist)}" aria-label="Find ${escapeHtml(title)} in Spotify">Find in Spotify →</button>`:'';const noteButton=a.source==='discogs'&&a.instanceId?`<button type="button" class="collection-notes-button" data-copy-instance="${a.instanceId}">${a.rcrdNotes?'Edit copy notes':'Add copy notes'}</button>`:'';const noteSummary=a.rcrdNotes?`<p class="collection-note-summary">${escapeHtml([a.rcrdNotes.condition,a.rcrdNotes.location,a.rcrdNotes.pricePaid,a.rcrdNotes.note].filter(Boolean).join(' · ').slice(0,180))}</p>`:'';return `<article class="collection-card" data-title="${escapeHtml(`${a.title} ${a.artist}`.toLowerCase())}" data-format="${escapeHtml(formatTagsFor(a).join(' '))}">${cover(a)}<div class="album-meta">${a.source==='discogs'?'':`<button class="remove-record" data-list="collection" data-index="${index}" aria-label="Remove ${escapeHtml(a.title)} from collection">×</button>`}<h3>${escapeHtml(a.title)}</h3><p>${artistSearchButton(a.artist,'discogs')} · ${escapeHtml(a.year)}</p>${a.source==='discogs'?'':`<div class="value">EST. VALUE ${a.price}</div>`}${spotifyButton}${noteButton}${noteSummary}${a.source==='discogs'?discogsDataCredit(a):''}</div></article>`}).join('')||`<p class="empty-state">${!apiConnected?'Connect Discogs to see your collection.':collectionFilter==='all'?'Your Discogs collection is ready for its first record.':`No ${escapeHtml(collectionFilter)} records were found.`}</p>`;renderPagination('collectionPagination',collectionPage,matching.length,collectionPageSize,'collection')}
+function renderWantlist(){const ordered=sortRecords(wantlist.map((a,index)=>({a,index})),wantlistSort,document.querySelector('#wantlistSortDirection').value);const pages=Math.max(1,Math.ceil(ordered.length/wantlistPageSize));wantlistPage=Math.min(wantlistPage,pages);const offset=(wantlistPage-1)*wantlistPageSize;const records=ordered.slice(offset,offset+wantlistPageSize);document.querySelector('#wantlistGrid').innerHTML=records.map(({a,index})=>{const releaseId=Number(a.releaseId);const releaseLink=a.source==='discogs'&&Number.isSafeInteger(releaseId)&&releaseId>0?`<a class="wantlist-shop" href="https://www.discogs.com/release/${releaseId}" target="_blank" rel="noopener noreferrer">Shop on Discogs ↗</a>`:'';return `<article class="want-card" data-title="${escapeHtml(`${a.title} ${a.artist}`.toLowerCase())}">${cover(a)}<div><h3>${escapeHtml(a.title)}</h3><p>${artistSearchButton(a.artist,'discogs')} · ${escapeHtml(a.year)}</p><button class="find-listing" data-album="${escapeHtml(`${a.artist} ${a.title}`)}">Find editions →</button>${releaseLink}${a.source==='discogs'?discogsDataCredit(a):''}${a.source==='discogs'?'':`<button class="remove-record secondary-action" data-list="wantlist" data-index="${index}">Remove</button>`}</div></article>`}).join('')||`<p class="empty-state">${apiConnected?'Your Discogs wantlist is clear.':'Connect Discogs to see your wantlist.'}</p>`;renderPagination('wantlistPagination',wantlistPage,ordered.length,wantlistPageSize,'wantlist')}
+let apiConnected=false;
 renderCollection();renderWantlist();
 let editingCollectionInstance=null;
 document.querySelector('#collectionGrid').addEventListener('click',event=>{const button=event.target.closest('[data-copy-instance]');if(!button)return;const record=collection.find(item=>item.source==='discogs'&&item.instanceId===Number(button.dataset.copyInstance));if(!record)return;const form=document.querySelector('#collectionNotesForm');editingCollectionInstance=record.instanceId;document.querySelector('#collectionNotesRecord').textContent=`${record.artist} · ${record.title}`;for(const field of ['condition','location','pricePaid','note'])form.elements[field].value=record.rcrdNotes?.[field]||'';document.querySelector('#collectionNotesStatus').textContent='Saved privately on this computer for your connected Discogs account.';document.querySelector('#collectionNotesDialog').showModal()});
@@ -148,7 +149,7 @@ let spotifyHomeNextRefresh=0;let spotifyHomeRateLimitedUntil=0;let spotifyHomeRe
 function browsingContextOwner(){return spotifyConnected&&spotifyAccountMarker?`spotify:${spotifyAccountMarker}`:apiConnected&&discogsAccountMarker?`discogs:${discogsAccountMarker}`:''}
 function restoreBrowsingContext(){if(browsingContextRestored)return;const owner=browsingContextOwner();if(!owner)return;let saved;try{saved=JSON.parse(sessionStorage.getItem('rcrdBrowsingContext')||'null')}catch{}if(!saved||saved.owner!==owner||!['home','spotify','market','collection','wantlist','settings'].includes(saved.view))return;browsingContextRestored=true;const nav=document.querySelector(`[data-view="${saved.view}"]`);if(!nav)return;nav.click();if(['home','spotify','market'].includes(saved.view)&&typeof saved.query==='string'&&saved.query.length<=200){if(saved.view==='spotify'&&['catalog','library'].includes(saved.scope))setSpotifySearchScope(saved.scope);document.querySelector('#searchInput').value=saved.query;if(saved.query.trim())filterCards(saved.query);updateSearchContext()}}
 window.addEventListener('pagehide',()=>{const owner=browsingContextOwner();if(!owner)return;try{sessionStorage.setItem('rcrdBrowsingContext',JSON.stringify({owner,view:document.querySelector('.active-view')?.id||'home',query:document.querySelector('#searchInput').value.slice(0,200),scope:spotifySearchMode}))}catch{}});
-let apiConnected=false;let spotifyConnected=false;let discogsAccountGeneration=0;const discogsRefreshSequence={collection:0,wantlist:0};const discogsLoadedAt={collection:0,wantlist:0};const discogsRefreshRequest={collection:null,wantlist:null};const DISCOGS_LIST_FRESH_MS=60000;
+let spotifyConnected=false;let discogsAccountGeneration=0;const discogsRefreshSequence={collection:0,wantlist:0};const discogsLoadedAt={collection:0,wantlist:0};const discogsRefreshRequest={collection:null,wantlist:null};const DISCOGS_LIST_FRESH_MS=60000;
 const discogsLastFailureAt={collection:0,wantlist:0};
 function renderApiResults(results,pagination={}){
   discogsSearchResults=results;discogsSearchPagination=pagination;
@@ -257,6 +258,7 @@ for(const service of ['Spotify','Discogs']){
 }
 function closeProfileMenus(except=null){for(const menu of profileMenus)if(menu!==except)menu.open=false}
 for(const menu of profileMenus)menu.addEventListener('toggle',()=>{if(menu.open)closeProfileMenus(menu)});
+let aboutDialogReturnFocus=null;
 function handleProfileMenuClick(event){
   const menu=event.target.closest('.profile-menu');
   if(!menu){closeProfileMenus();return}
@@ -269,6 +271,7 @@ function handleProfileMenuClick(event){
     notice.textContent='';
     restartRcrd(message=>{notice.textContent=message;notice.hidden=false});
   }else if(option.dataset.profileAction==='about'){
+    aboutDialogReturnFocus=menu.querySelector('.profile-menu-trigger');
     const about=document.querySelector('#settingsAbout').cloneNode(true);
     about.removeAttribute('id');
     about.removeAttribute('tabindex');
@@ -278,6 +281,7 @@ function handleProfileMenuClick(event){
   }
 }
 document.addEventListener('click',handleProfileMenuClick);
+document.querySelector('#aboutDialog').addEventListener('close',()=>{aboutDialogReturnFocus?.focus();aboutDialogReturnFocus=null});
 document.querySelector('#aboutDialogClose').addEventListener('click',()=>document.querySelector('#aboutDialog').close());
 document.querySelector('#updateDialogClose').addEventListener('click',()=>document.querySelector('#updateDialog').close());
 function isDialogBackdropPointer(event){
@@ -327,9 +331,10 @@ async function installRcrdUpdate(){
       try{
         const healthResponse=await fetch('/api/health',{cache:'no-store',signal:AbortSignal.timeout(2500)});const health=await healthResponse.json();
         if(healthResponse.ok&&health.app==='rcrd'&&health.pid!==data.previousPid){
-          const statusResponse=await fetch('/api/update-status',{cache:'no-store',signal:AbortSignal.timeout(2500)});const status=await statusResponse.json();
-          if(status.status==='failed'){const failure=new Error(status.message||'The update failed. RCRD restored the previous version.');failure.updateFailed=true;throw failure}
-          if(status.status==='complete'&&health.version===data.version){message.textContent='Update installed. Reloading RCRD…';try{sessionStorage.setItem('rcrd-update-completed',data.version)}catch{}location.reload();return}
+          if(health.version===data.version){message.textContent='Update installed. Reloading RCRD…';try{sessionStorage.setItem('rcrd-update-completed',data.version)}catch{}location.reload();return}
+          let failureMessage='The update did not install. RCRD restarted without the requested version.';
+          try{const statusResponse=await fetch('/api/update-status',{cache:'no-store',signal:AbortSignal.timeout(2500)});if(statusResponse.ok){const status=await statusResponse.json();if(status.status==='failed'&&status.message)failureMessage=status.message}}catch{}
+          const failure=new Error(failureMessage);failure.updateFailed=true;throw failure;
         }
       }catch(error){if(error.updateFailed)throw error}
       await new Promise(resolve=>setTimeout(resolve,1000));
@@ -471,7 +476,7 @@ async function toggleCurrentTrackLiked(){
 }
 document.querySelector('#playerLiked').addEventListener('click',toggleCurrentTrackLiked);
 renderPlayerLiked();
-function resetSpotifyAccountUi(){resetSpotifyMix();resetCreatePlaylistUi();spotifyCatalogAlbumView=null;spotifyCatalogResults=[];document.querySelector('#spotify .library-controls').hidden=false;document.querySelector('#spotifyGrid').classList.remove('collection-lookup-results');spotifyConnected=false;spotifyCanStream=false;spotifyCanModifyLibrary=false;spotifyPlayerConnectFailed=false;++spotifyAccountGeneration;++likedRequestRevision;++spotifyLibraryRevision;resetListeningHistoryUi();resetSpotifyPlayCounts();likedStatus=null;likedCheckPending=false;likedMutationPending=false;spotifyLibraryNeedsRefresh=false;++spotifyPlaylistSequence;++spotifySearchSequence;clearTimeout(spotifySearchTimer);if(spotifySearchCompletion){spotifySearchCompletion();spotifySearchCompletion=null}spotifyHomeRequest=null;spotifyHomeNextRefresh=0;spotifyHomeRateLimitedUntil=0;spotifyLibraryAlbums=[];spotifySavedAlbums=[];spotifyLibraryTracks=[];spotifyLibraryPlaybackRecords=[];spotifyHomeRecommendations=[];spotifyLibraryLoaded=false;spotifySavedLibraryLoaded=false;spotifyPlaylistPreviewState=null;spotifyLibraryPromise=null;spotifyLibraryError='';spotifyTrackUri=null;renderPlayerLiked();spotifyDeviceId=null;spotifyPlayerState='waiting';spotifyPlayerIssue='';spotifyActiveDevice='Not checked';spotifySkipQueue=Promise.resolve();spotifySkipPending=0;spotifySkipBusy={next:0,previous:0};spotifyToggleQueue=Promise.resolve();spotifyTogglePending=0;spotifyModeQueue=Promise.resolve();spotifyPlaybackStartPending=0;document.querySelectorAll('#previousButton,#nextButton,#playButton').forEach(button=>button.setAttribute('aria-busy','false'));shuffleRequestPending=false;++shuffleRevision;const shuffleButton=document.querySelector('#shuffleButton');if(shuffleButton){shuffleButton.disabled=false;shuffleButton.setAttribute('aria-busy','false')}repeatRequestPending=false;++repeatRevision;const repeatButton=document.querySelector('#repeatButton');if(repeatButton){repeatButton.disabled=false;repeatButton.setAttribute('aria-busy','false')}if(spotifySyncTimer){clearInterval(spotifySyncTimer);spotifySyncTimer=null}clearTimeout(spotifyPlayerReadyTimer);spotifyPlayerReadyTimer=null;if(spotifyPlayer){try{spotifyPlayer.disconnect()}catch{}spotifyPlayer=null}const avatar=document.querySelector('#profileAvatar');avatar.classList.remove('has-image');avatar.classList.add('is-placeholder');avatar.style.backgroundImage='';avatar.textContent='?';document.querySelector('#profileName').textContent='Connect account';document.querySelector('#profileMeta').textContent='Spotify profile';const connect=document.querySelector('#connectSpotify');connect.textContent='Connect Spotify';connect.classList.remove('connected');document.querySelector('#spotifyReminder').hidden=true;const playlistSelect=document.querySelector('#spotifyPlaylistSelect');playlistSelect.disabled=true;playlistSelect.innerHTML='<option value="">Connect Spotify for playlists</option>';setSidebarPlaylistOptions([],'Connect Spotify for playlists',true);document.querySelector('#spotifyGrid').innerHTML='<p class="empty-state">Connect Spotify to load and search your saved library.</p>';document.querySelector('#spotifyPagination').innerHTML='';document.querySelector('#spotifyLibraryStatus').textContent='Not connected';showSpotifyLibraryNotice('Connect Spotify to load your saved albums, tracks, and playlists.');document.querySelector('#spotifyCacheMeta').textContent='';document.querySelector('#recommendations').innerHTML='<p class="empty-state">Connect Spotify to see recommendations from your listening.</p>';document.querySelector('#homeSpotifyPagination').innerHTML='';recentTracksData=[];renderListeningDiscogsSuggestions([],'Connect Spotify to see your recent plays.');setSong('Connect Spotify','Playback unavailable','');playing=false;updatePlaybackModes({repeat_state:'off',shuffle_state:false,context:null});const progress=document.querySelector('#playerProgress');progress.value=0;updateProgress(0,0);renderPlayer();renderSpotifyConnectionStatus({connected:false});document.querySelector('#spotifyCreatePlaylist').disabled=true}
+function resetSpotifyAccountUi(){resetSpotifyMix();resetCreatePlaylistUi();try{sessionStorage.removeItem('rcrd-private-playlist-draft')}catch{}spotifyCatalogAlbumView=null;spotifyCatalogResults=[];document.querySelector('#spotify .library-controls').hidden=false;document.querySelector('#spotifyGrid').classList.remove('collection-lookup-results');spotifyConnected=false;spotifyCanStream=false;spotifyCanModifyLibrary=false;spotifyCanModifyPrivatePlaylists=null;spotifyPlayerConnectFailed=false;++spotifyAccountGeneration;++likedRequestRevision;++spotifyLibraryRevision;resetListeningHistoryUi();resetSpotifyPlayCounts();likedStatus=null;likedCheckPending=false;likedMutationPending=false;spotifyLibraryNeedsRefresh=false;++spotifyPlaylistSequence;++spotifySearchSequence;clearTimeout(spotifySearchTimer);if(spotifySearchCompletion){spotifySearchCompletion();spotifySearchCompletion=null}spotifyHomeRequest=null;spotifyHomeNextRefresh=0;spotifyHomeRateLimitedUntil=0;spotifyLibraryAlbums=[];spotifySavedAlbums=[];spotifyLibraryTracks=[];spotifyLibraryPlaybackRecords=[];spotifyHomeRecommendations=[];spotifyLibraryLoaded=false;spotifySavedLibraryLoaded=false;spotifyPlaylistPreviewState=null;spotifyLibraryPromise=null;spotifyLibraryError='';spotifyTrackUri=null;renderPlayerLiked();spotifyDeviceId=null;spotifyPlayerState='waiting';spotifyPlayerIssue='';spotifyActiveDevice='Not checked';spotifySkipQueue=Promise.resolve();spotifySkipPending=0;spotifySkipBusy={next:0,previous:0};spotifyToggleQueue=Promise.resolve();spotifyTogglePending=0;spotifyModeQueue=Promise.resolve();spotifyPlaybackStartPending=0;document.querySelectorAll('#previousButton,#nextButton,#playButton').forEach(button=>button.setAttribute('aria-busy','false'));shuffleRequestPending=false;++shuffleRevision;const shuffleButton=document.querySelector('#shuffleButton');if(shuffleButton){shuffleButton.disabled=false;shuffleButton.setAttribute('aria-busy','false')}repeatRequestPending=false;++repeatRevision;const repeatButton=document.querySelector('#repeatButton');if(repeatButton){repeatButton.disabled=false;repeatButton.setAttribute('aria-busy','false')}if(spotifySyncTimer){clearInterval(spotifySyncTimer);spotifySyncTimer=null}clearTimeout(spotifyPlayerReadyTimer);spotifyPlayerReadyTimer=null;if(spotifyPlayer){try{spotifyPlayer.disconnect()}catch{}spotifyPlayer=null}const avatar=document.querySelector('#profileAvatar');avatar.classList.remove('has-image');avatar.classList.add('is-placeholder');avatar.style.backgroundImage='';avatar.textContent='?';document.querySelector('#profileName').textContent='Connect account';document.querySelector('#profileMeta').textContent='Spotify profile';const connect=document.querySelector('#connectSpotify');connect.textContent='Connect Spotify';connect.classList.remove('connected');document.querySelector('#spotifyReminder').hidden=true;const playlistSelect=document.querySelector('#spotifyPlaylistSelect');playlistSelect.disabled=true;playlistSelect.innerHTML='<option value="">Connect Spotify for playlists</option>';setSidebarPlaylistOptions([],'Connect Spotify for playlists',true);document.querySelector('#spotifyGrid').innerHTML='<p class="empty-state">Connect Spotify to load and search your saved library.</p>';document.querySelector('#spotifyPagination').innerHTML='';document.querySelector('#spotifyLibraryStatus').textContent='Not connected';showSpotifyLibraryNotice('Connect Spotify to load your saved albums, tracks, and playlists.');document.querySelector('#spotifyCacheMeta').textContent='';document.querySelector('#recommendations').innerHTML='<p class="empty-state">Connect Spotify to see recommendations from your listening.</p>';document.querySelector('#homeSpotifyPagination').innerHTML='';recentTracksData=[];renderListeningDiscogsSuggestions([],'Connect Spotify to see your recent plays.');setSong('Connect Spotify','Playback unavailable','');playing=false;updatePlaybackModes({repeat_state:'off',shuffle_state:false,context:null});const progress=document.querySelector('#playerProgress');progress.value=0;updateProgress(0,0);renderPlayer();renderSpotifyConnectionStatus({connected:false});document.querySelector('#spotifyCreatePlaylist').disabled=true}
 function spotifyRenewalNoticeKey(status){return status.needsReauthorization?`due:${status.refreshDueAt||0}`:`warning:${status.refreshDueAt||0}`}
 function renderProfileRenewalNotice(status){
   const days=Number.isFinite(status.daysRemaining)?Math.max(0,status.daysRemaining):null;
@@ -521,6 +526,9 @@ function renderSpotifyConnectionStatus(status){
   }else if(connected&&status.canModifyLibrary===false){
     help='Spotify is connected. Liked Songs needs an additional permission; playback and existing library access remain connected.';
     reminder.innerHTML='<strong>Spotify is connected.</strong> Grant the additional permission to save tracks. <button type="button" class="secondary-action" data-spotify-authorize>Enable Liked Songs</button>';
+  }else if(connected&&status.canModifyPrivatePlaylists===false){
+    help='Spotify is connected. Creating private playlists needs one additional permission.';
+    reminder.innerHTML='<strong>Private playlists need approval.</strong> <button type="button" class="secondary-action" data-spotify-authorize>Enable private playlists</button>';
   }else if(connected&&typeof status.canModifyLibrary!=='boolean'){
     help='Spotify is connected. Restart RCRD to load the Liked Songs server update.';
     reminder.textContent=help;
@@ -528,7 +536,7 @@ function renderSpotifyConnectionStatus(status){
     help=`Spotify authorization renewal: ${status.daysRemaining} day${status.daysRemaining===1?'':'s'} remaining.`;
     if(status.daysRemaining<=14)reminder.innerHTML=`<strong>Spotify authorization reminder:</strong> renew within ${status.daysRemaining} day${status.daysRemaining===1?'':'s'}. <button type="button" class="secondary-action" data-spotify-authorize>Renew authorization</button>`;
   }
-  reminder.hidden=!connected||!(status.needsReauthorization||status.canStream===false||status.canModifyLibrary!==true||(Number.isFinite(status.daysRemaining)&&status.daysRemaining<=14));
+  reminder.hidden=!connected||!(status.needsReauthorization||status.canStream===false||status.canModifyLibrary!==true||status.canModifyPrivatePlaylists===false||(Number.isFinite(status.daysRemaining)&&status.daysRemaining<=14));
   document.querySelector('#settingsSpotifyRenewal').textContent=help;
 }
 document.addEventListener('click',event=>{if(event.target.closest('[data-spotify-authorize]'))location.href='/auth/spotify/start'});
@@ -552,6 +560,7 @@ async function refreshSpotifyStatus(){
     spotifyConnected=Boolean(status.connected);
     document.querySelector('#spotifyCreatePlaylist').disabled=!spotifyConnected;
     spotifyCanModifyLibrary=spotifyConnected&&Boolean(status.canModifyLibrary);
+    spotifyCanModifyPrivatePlaylists=spotifyConnected&&typeof status.canModifyPrivatePlaylists==='boolean'?status.canModifyPrivatePlaylists:null;
     spotifyCanReadTop=spotifyConnected&&Boolean(status.canReadTop);
     document.querySelector('#homeTopToggle').textContent=spotifyCanReadTop?'Long-term favorites':'Enable long-term favorites';
     renderSpotifyConnectionStatus(status);
@@ -559,7 +568,7 @@ async function refreshSpotifyStatus(){
     renderPlayerLiked();
     if(spotifyConnected&&!couldModifyLibrary&&spotifyCanModifyLibrary&&spotifyTrackUri)refreshCurrentTrackLikedStatus();
     if(spotifyConnected){restoreBrowsingContext();initSpotifyPlayer();if(spotifySearchMode==='catalog'){if(document.querySelector('.active-view')?.id==='spotify')searchSpotifyCatalog(document.querySelector('#searchInput').value)}else renderSpotifyLibrary();spotifyHomeRecommendations=[];renderHomeRecommendations('Loading your Spotify listening…');renderListeningDiscogsSuggestions([],'Loading your recent Spotify plays…');refreshSpotifyProfile();refreshSpotifyHome();refreshSpotifyPlaylists();maybeLoadSpotifyLibrary()}
-    if(spotifyConnected&&new URLSearchParams(location.search).get('spotify')==='connected'){showToast('Spotify connected successfully');history.replaceState({},'',location.pathname)}
+    if(spotifyConnected){restoreCreatePlaylistDraft(status);if(new URLSearchParams(location.search).get('spotify')==='connected'){showToast('Spotify connected successfully');history.replaceState({},'',location.pathname)}}
   }catch{
     if(generation!==spotifyAccountGeneration)return;
     renderSpotifyConnectionStatus({});
@@ -820,13 +829,13 @@ async function loadSpotifyPlaylist(id,force=false){
   try{
     if(!force){const previewResponse=await fetch(`${endpoint}&preview=1`);const previewData=await previewResponse.json();if(!current())return;
     if(!previewResponse.ok||!Array.isArray(previewData.tracks)||!Number.isSafeInteger(previewData.total)||previewData.total<0||previewData.total<previewData.tracks.length)throw new Error('Playlist preview unavailable');
-    spotifyLibraryAlbums=spotifyPlaylistRecords(previewData.tracks,id);spotifyLibraryLoaded=true;spotifyPlaylistPreviewState={total:previewData.total,status:'loading'};
+    spotifyLibraryAlbums=spotifyPlaylistRecords(previewData.tracks,id);spotifyLibraryLoaded=true;spotifyPlaylistPreviewState={total:previewData.total,status:'loading'};syncSpotifyPlaylistCount(id,previewData.total);
     renderSpotifyLibrary(document.querySelector('#searchInput').value);const previewSync=spotifySyncLabel(previewData.sync?.source,previewData.sync?.updatedAt);showSpotifyLibraryNotice(`${previewSync?`${previewSync} · `:''}Showing ${spotifyLibraryAlbums.length} ${spotifyLibraryAlbums.length===1?'track':'tracks'} from ${previewData.total} playlist items. Search and sort cover the preview until loading completes.`)}
   }catch{if(!current())return}
   try{
     const response=await fetch(endpoint,force?{method:'POST',headers:{'X-RCRD-Request':'1'}}:undefined);const data=await response.json();if(!current())return;
     if(!response.ok)throw new Error(data.error||'Could not load playlist');if(!Array.isArray(data.tracks))throw new Error('Spotify returned an invalid playlist');
-    const records=spotifyPlaylistRecords(data.tracks,id);spotifyLibraryAlbums=records;spotifyLibraryLoaded=true;spotifyPlaylistPreviewState=null;spotifyLibraryError='';renderSpotifyLibrary(document.querySelector('#searchInput').value);const sync=spotifySyncLabel(data.sync?.source,data.sync?.updatedAt);settleSpotifyLibraryNotice(data.sync?.source,data.sync?.updatedAt,`${sync?`${sync} · `:''}Showing ${records.length} tracks from the selected playlist.`);
+    const records=spotifyPlaylistRecords(data.tracks,id);spotifyLibraryAlbums=records;spotifyLibraryLoaded=true;spotifyPlaylistPreviewState=null;spotifyLibraryError='';syncSpotifyPlaylistCount(id,records.length);renderSpotifyLibrary(document.querySelector('#searchInput').value);const sync=spotifySyncLabel(data.sync?.source,data.sync?.updatedAt);settleSpotifyLibraryNotice(data.sync?.source,data.sync?.updatedAt,`${sync?`${sync} · `:''}Showing ${records.length} tracks from the selected playlist.`);
   }catch(error){
     if(!current())return;
     if(spotifyPlaylistPreviewState){spotifyPlaylistPreviewState.status='unavailable';renderSpotifyLibrary(document.querySelector('#searchInput').value);showSpotifyLibraryNotice('Only the playlist preview is available. Select this playlist again to retry loading the rest.')}
@@ -835,11 +844,65 @@ async function loadSpotifyPlaylist(id,force=false){
     showToast(error.message);
   }
 }
-async function refreshSpotifyPlaylists(){if(!spotifyConnected)return;const generation=spotifyAccountGeneration;try{const response=await fetch('/api/spotify/playlists');const data=await response.json();if(!spotifyConnected||generation!==spotifyAccountGeneration)return;if(!response.ok)throw new Error(data.error||'Could not load Spotify playlists');const playlists=(data.playlists||[]).map(list=>({id:list.id,name:`${list.name} (${list.tracksTotal})`}));const select=document.querySelector('#spotifyPlaylistSelect');select.disabled=false;select.innerHTML='<option value="">Saved library</option>'+playlists.map(list=>`<option value="${escapeHtml(list.id)}">${escapeHtml(list.name)}</option>`).join('');setSidebarPlaylistOptions(playlists);if(!data.playlists?.length)showSpotifyLibraryNotice('No readable Spotify playlists were returned for this account.')}catch(error){if(!spotifyConnected||generation!==spotifyAccountGeneration)return;showSpotifyLibraryNotice(error.message);const select=document.querySelector('#spotifyPlaylistSelect');select.disabled=true;select.innerHTML='<option value="">Playlists unavailable</option>';setSidebarPlaylistOptions([],'Playlists unavailable',true)}}
+async function refreshSpotifyPlaylists(){if(!spotifyConnected)return;const generation=spotifyAccountGeneration;try{const response=await fetch('/api/spotify/playlists');const data=await response.json();if(!spotifyConnected||generation!==spotifyAccountGeneration)return;if(!response.ok)throw new Error(data.error||'Could not load Spotify playlists');const playlists=(data.playlists||[]).map(list=>({id:list.id,baseName:list.name,name:`${list.name} (${list.tracksTotal})`}));const select=document.querySelector('#spotifyPlaylistSelect');select.disabled=false;select.innerHTML='<option value="">Saved library</option>'+playlists.map(list=>`<option value="${escapeHtml(list.id)}" data-playlist-name="${escapeHtml(list.baseName)}">${escapeHtml(list.name)}</option>`).join('');setSidebarPlaylistOptions(playlists);if(!data.playlists?.length)showSpotifyLibraryNotice('No readable Spotify playlists were returned for this account.')}catch(error){if(!spotifyConnected||generation!==spotifyAccountGeneration)return;showSpotifyLibraryNotice(error.message);const select=document.querySelector('#spotifyPlaylistSelect');select.disabled=true;select.innerHTML='<option value="">Playlists unavailable</option>';setSidebarPlaylistOptions([],'Playlists unavailable',true)}}
+function syncSpotifyPlaylistCount(id,total){
+  if(!id||!Number.isSafeInteger(total)||total<0)return;
+  const select=document.querySelector('#spotifyPlaylistSelect');
+  if(!select?.options)return;
+  const option=[...select.options].find(item=>item.value===id);
+  if(!option||!option.dataset.playlistName)return;
+  const label=`${option.dataset.playlistName} (${total})`;
+  option.textContent=label;
+  for(const item of document.querySelectorAll('#sidebarPlaylistList [role="option"]')){
+    if(item.dataset.playlistId===id)item.textContent=label;
+  }
+  if(document.querySelector('#sidebarPlaylistTrigger').dataset.value===id)document.querySelector('#sidebarPlaylistValue').textContent=label;
+  syncThemedSelect(select);
+}
 let createPlaylistSongs=[],createPlaylistSearchResults=[],createPlaylistSearchTimer=null,createPlaylistSearchSequence=0,createPlaylistPendingId='';
 function updateCreatePlaylistSubmit(){
   const button=document.querySelector('#spotifyCreatePlaylistSubmit');
-  if(button.getAttribute('aria-busy')!=='true')button.disabled=!document.querySelector('#spotifyCreatePlaylistName').value.trim()||!createPlaylistSongs.length;
+  if(button.getAttribute('aria-busy')!=='true')button.disabled=spotifyCanModifyPrivatePlaylists===false||!document.querySelector('#spotifyCreatePlaylistName').value.trim()||!createPlaylistSongs.length;
+}
+function showCreatePlaylistPermission(message='Spotify needs your approval to create private playlists.'){
+  const notice=document.querySelector('#spotifyCreatePlaylistPermission');
+  notice.hidden=false;
+  document.querySelector('#spotifyCreatePlaylistPermissionText').textContent=message;
+  updateCreatePlaylistSubmit();
+}
+async function authorizeCreatePlaylist(){
+  if(!spotifyConnected)return;
+  let marker=spotifyAccountMarker;
+  const generation=spotifyAccountGeneration;
+  if(!marker){
+    try{
+      const profile=await fetch('/api/spotify/me');
+      if(!profile.ok)throw new Error();
+      const response=await fetch('/api/spotify/status');
+      if(!response.ok)throw new Error();
+      const status=await response.json();
+      if(status.connected&&typeof status.accountMarker==='string')marker=status.accountMarker;
+    }catch{}
+  }
+  if(!marker||generation!==spotifyAccountGeneration||!spotifyConnected){document.querySelector('#spotifyCreatePlaylistStatus').textContent='Could not verify your Spotify account. Reload RCRD and try again.';return}
+  try{
+    sessionStorage.setItem('rcrd-private-playlist-draft',JSON.stringify({marker,savedAt:Date.now(),name:document.querySelector('#spotifyCreatePlaylistName').value,search:document.querySelector('#spotifyCreatePlaylistSearch').value,songs:createPlaylistSongs}));
+  }catch{}
+  location.href='/auth/spotify/start';
+}
+function restoreCreatePlaylistDraft(status){
+  const result=new URLSearchParams(location.search).get('spotify');
+  if(result!=='connected'&&result!=='denied')return;
+  let draft;
+  try{draft=JSON.parse(sessionStorage.getItem('rcrd-private-playlist-draft')||'null');sessionStorage.removeItem('rcrd-private-playlist-draft')}catch{return}
+  if(!draft||draft.marker!==status.accountMarker||!Number.isFinite(draft.savedAt)||Date.now()-draft.savedAt>15*60*1000||Date.now()<draft.savedAt||typeof draft.name!=='string'||draft.name.length>100||!Array.isArray(draft.songs)||draft.songs.length>100)return;
+  openCreatePlaylistDialog();
+  document.querySelector('#spotifyCreatePlaylistName').value=draft.name;
+  document.querySelector('#spotifyCreatePlaylistSearch').value=typeof draft.search==='string'?draft.search.slice(0,100):'';
+  createPlaylistSongs=draft.songs.filter(song=>song&&/^spotify:track:[A-Za-z0-9]+$/.test(song.uri||'')).map(song=>({uri:song.uri,name:String(song.name||'Untitled track').slice(0,200),artist:String(song.artist||'Unknown artist').slice(0,200),album:String(song.album||'').slice(0,200),image:safeImageUrl(song.image)}));
+  renderCreatePlaylistSongs();
+  if(status.canModifyPrivatePlaylists===true)document.querySelector('#spotifyCreatePlaylistStatus').textContent='Private playlist access enabled. Review your songs and create the playlist.';
+  else showCreatePlaylistPermission(result==='denied'?'Spotify permission was not approved. Your playlist draft is still here.':'Spotify still needs private playlist permission. Your draft is still here.');
 }
 function renderCreatePlaylistSongs(){
   const selected=new Set(createPlaylistSongs.map(song=>song.uri));
@@ -880,6 +943,7 @@ function resetCreatePlaylistUi(){
   document.querySelector('#spotifyCreatePlaylistSearch').value='';
   renderCreatePlaylistSearchResults('Search Spotify to find songs.');renderCreatePlaylistSongs();
   document.querySelector('#spotifyCreatePlaylistStatus').textContent='';
+  document.querySelector('#spotifyCreatePlaylistPermission').hidden=true;
   const submit=document.querySelector('#spotifyCreatePlaylistSubmit');submit.disabled=true;submit.textContent='Create playlist';submit.setAttribute('aria-busy','false');
   document.querySelector('#spotifyCreatePlaylist').disabled=!spotifyConnected;
 }
@@ -887,10 +951,12 @@ function openCreatePlaylistDialog(){
   if(!spotifyConnected){showToast('Connect Spotify to create a playlist.');return}
   resetCreatePlaylistUi();
   const dialog=document.querySelector('#spotifyCreatePlaylistDialog');dialog.showModal();document.querySelector('#spotifyCreatePlaylistName').focus();
+  if(spotifyCanModifyPrivatePlaylists===false)showCreatePlaylistPermission();
 }
 async function submitCreatePlaylist(event){
   event.preventDefault();
   const name=document.querySelector('#spotifyCreatePlaylistName').value.trim();const button=document.querySelector('#spotifyCreatePlaylistSubmit');const status=document.querySelector('#spotifyCreatePlaylistStatus');
+  if(spotifyCanModifyPrivatePlaylists===false){showCreatePlaylistPermission();return}
   if(!spotifyConnected||!name||name.length>100||!createPlaylistSongs.length||button.getAttribute('aria-busy')==='true')return;
   const generation=spotifyAccountGeneration;button.disabled=true;button.setAttribute('aria-busy','true');status.textContent=createPlaylistPendingId?'Adding songs to your playlist…':'Creating your private playlist…';
   let saved=false;
@@ -898,14 +964,15 @@ async function submitCreatePlaylist(event){
     const uris=createPlaylistSongs.map(song=>song.uri);
     const response=await fetch(createPlaylistPendingId?'/api/spotify/playlist/items':'/api/spotify/playlists',{method:'POST',headers:{'Content-Type':'application/json','X-RCRD-Request':'1'},body:JSON.stringify(createPlaylistPendingId?{id:createPlaylistPendingId,uris}:{name,uris})});const data=await response.json();
     if(generation!==spotifyAccountGeneration||!spotifyConnected)return;
-    if(!response.ok)throw new Error(data.error||'Could not create the playlist.');
+    if(!response.ok){if(response.status===403&&data.needsSpotifyAuthorization){spotifyCanModifyPrivatePlaylists=false;status.textContent='';showCreatePlaylistPermission(data.error);return}throw new Error(data.error||'Could not create the playlist.')}
     if(data.songsAdded===false){createPlaylistPendingId=data.id;document.querySelector('#spotifyCreatePlaylistName').disabled=true;button.textContent='Retry adding songs';status.textContent='The playlist was created, but Spotify could not add the songs. Retry here; songs already present will be skipped.';return}
     const id=createPlaylistPendingId||data.id;createPlaylistPendingId='';
     saved=true;status.textContent='Playlist created. Opening it in RCRD…';
     await refreshSpotifyPlaylists();
     if(generation!==spotifyAccountGeneration||!spotifyConnected)return;
     const select=document.querySelector('#spotifyPlaylistSelect');
-    if(![...select.options].some(option=>option.value===id)){const option=document.createElement('option');option.value=id;option.textContent=`${name} (${uris.length})`;select.add(option);if(select.disabled)setSidebarPlaylistOptions([{id,name:option.textContent}])}
+    if(![...select.options].some(option=>option.value===id)){const option=document.createElement('option');option.value=id;option.dataset.playlistName=name;option.textContent=`${name} (${uris.length})`;select.add(option);if(select.disabled)setSidebarPlaylistOptions([{id,name:option.textContent}])}
+    syncSpotifyPlaylistCount(id,uris.length);
     select.disabled=false;
     document.querySelector('#spotifyCreatePlaylistDialog').close();document.querySelector('[data-view="spotify"]').click();
     await loadSpotifyPlaylist(id);
@@ -914,6 +981,7 @@ async function submitCreatePlaylist(event){
   finally{if(generation===spotifyAccountGeneration){button.setAttribute('aria-busy','false');button.disabled=saved;updateCreatePlaylistSubmit()}}
 }
 document.querySelector('#spotifyCreatePlaylist').addEventListener('click',openCreatePlaylistDialog);
+document.querySelector('#spotifyCreatePlaylistAuthorize').addEventListener('click',authorizeCreatePlaylist);
 document.querySelector('#spotifyCreatePlaylistClose').addEventListener('click',()=>document.querySelector('#spotifyCreatePlaylistDialog').close());
 document.querySelector('#spotifyCreatePlaylistDialog').addEventListener('pointerdown',handleAboutDialogBackdropPointer);
 document.querySelector('#spotifyCreatePlaylistForm').addEventListener('submit',submitCreatePlaylist);
@@ -1922,3 +1990,13 @@ document.querySelector('#spotifyLibraryRefresh').addEventListener('click',event=
 }));
 for(const section of ['collection','wantlist'])document.querySelector(`#${section}Refresh`).addEventListener('click',event=>runManualRefresh(event.currentTarget,()=>discogsRefreshRequest[section]||refreshDiscogsSection(section,true)));
 refreshAboutVersion();
+const mobileMenuButton=document.querySelector('.mobile-menu');
+const mobileSidebar=document.querySelector('#mobileSidebar');
+const mobileNavBackdrop=document.querySelector('.mobile-nav-backdrop');
+function closeMobileNav(){if(!document.body.classList.contains('mobile-nav-open'))return;document.body.classList.remove('mobile-nav-open');mobileMenuButton.setAttribute('aria-expanded','false');mobileMenuButton.setAttribute('aria-label','Open menu');mobileNavBackdrop.hidden=true;mobileMenuButton.focus()}
+mobileMenuButton.addEventListener('click',()=>{document.body.classList.add('mobile-nav-open');mobileMenuButton.setAttribute('aria-expanded','true');mobileMenuButton.setAttribute('aria-label','Menu open');mobileNavBackdrop.hidden=false;mobileSidebar.querySelector('.mobile-nav-close').focus()});
+mobileSidebar.querySelector('.mobile-nav-close').addEventListener('click',closeMobileNav);
+mobileNavBackdrop.addEventListener('click',closeMobileNav);
+mobileSidebar.addEventListener('click',event=>{if(event.target.closest('[data-view]'))closeMobileNav()});
+document.addEventListener('keydown',event=>{if(event.key==='Escape'&&document.body.classList.contains('mobile-nav-open')){event.preventDefault();closeMobileNav();return}if(event.key.toLowerCase()!=='k'||!(event.ctrlKey||event.metaKey)||event.altKey||event.repeat)return;const target=event.target;if(target?.closest?.('input,textarea,select,[contenteditable="true"]')||document.querySelector('dialog[open]'))return;const search=document.querySelector('#searchInput');if(search.closest('.search').hidden)return;event.preventDefault();search.focus()});
+window.matchMedia('(min-width: 621px)').addEventListener('change',event=>{if(event.matches)closeMobileNav()});

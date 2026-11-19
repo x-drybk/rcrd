@@ -109,6 +109,8 @@ async function fixture(run, { spotifyCacheUsers = {}, spotifyScope = '', spotify
   fs.copyFileSync(path.join(__dirname, '..', 'assets', 'rcrd-cover-placeholder.webp'), path.join(directory, 'assets', 'rcrd-cover-placeholder.webp'));
   fs.mkdirSync(path.join(directory, 'scripts'));
   fs.copyFileSync(path.join(__dirname, '..', 'scripts', 'Parse-Spotify-History.ps1'), path.join(directory, 'scripts', 'Parse-Spotify-History.ps1'));
+  fs.copyFileSync(path.join(__dirname, '..', 'scripts', 'History-Event-Index.cjs'), path.join(directory, 'scripts', 'History-Event-Index.cjs'));
+  fs.copyFileSync(path.join(__dirname, '..', 'scripts', 'History-Transaction.cjs'), path.join(directory, 'scripts', 'History-Transaction.cjs'));
   fs.writeFileSync(path.join(runtime, 'spotify-cache.json'), spotifyCacheRaw ?? JSON.stringify({ version: spotifyCacheVersion, users: { synthetic: { private: true }, ...spotifyCacheUsers } }));
   const key = crypto.randomBytes(32);
   fs.writeFileSync(path.join(runtime, 'oauth-session.key'), key);
@@ -132,7 +134,7 @@ async function fixture(run, { spotifyCacheUsers = {}, spotifyScope = '', spotify
   const fakeProcess = { platform: process.platform, env: { PORT: '3000', HOST: '0.0.0.0', DISCOGS_CONSUMER_KEY: 'synthetic-key', DISCOGS_CONSUMER_SECRET: 'synthetic-secret', SPOTIFY_CLIENT_ID: 'synthetic-client', SPOTIFY_CLIENT_SECRET: 'synthetic-client-secret' }, pid: 12345, exit() { throw new Error('Unexpected process.exit in test'); } };
   fakeProcess.env.RCRD_METADATA_CONTACT = metadataContact;
   fakeProcess.env.GENIUS_ACCESS_TOKEN = geniusAccessToken;
-  const testRequire = name => name === 'node:fs' ? testFs : name === 'node:child_process' ? {
+  const testRequire = name => name === './scripts/History-Event-Index.cjs' ? require('../scripts/History-Event-Index.cjs') : name === './scripts/History-Transaction.cjs' ? require('../scripts/History-Transaction.cjs') : name === 'node:fs' ? testFs : name === 'node:child_process' ? {
     spawn(command, args, options) {
       if (command !== 'powershell.exe' || !args.some(value => String(value).endsWith('Parse-Spotify-History.ps1')) || !state.historyParser) throw new Error('Unexpected child process in test');
       assert.equal(options.env.SPOTIFY_CLIENT_SECRET, undefined);
@@ -147,7 +149,17 @@ async function fixture(run, { spotifyCacheUsers = {}, spotifyScope = '', spotify
           const ledger = ledgerIndex === -1 ? [] : JSON.parse(fs.readFileSync(args[ledgerIndex + 1], 'utf8'));
           const summary = state.historyParser(fs.readFileSync(archive), ledger);
           if (!summary) child.emit('exit', 1);
-          else { fs.writeFileSync(output, JSON.stringify(summary)); child.emit('exit', 0); }
+          else {
+            const eventPath = args[args.indexOf('-EventPath') + 1];
+            const { recordFor } = require('../scripts/History-Event-Index.cjs');
+            const events = summary.events || summary.tracks.flatMap((track, trackIndex) => {
+              const matches = (summary.matchedRecentEvents || []).filter(key => key.startsWith(`${track.uri}:`)).map(key => ({ uri: track.uri, playedAt: Number(key.slice(track.uri.length + 1)) }));
+              return [...matches, ...Array.from({ length: track.plays - matches.length }, (_, index) => ({ uri: track.uri, playedAt: Date.parse(summary.firstAt) + trackIndex * 10000000 + index * 1000 }))];
+            });
+            fs.writeFileSync(eventPath, Buffer.concat(events.map(event => recordFor(event))));
+            delete summary.events;
+            fs.writeFileSync(output, JSON.stringify(summary)); child.emit('exit', 0);
+          }
         } catch { child.emit('exit', 1); }
       });
       return child;
@@ -183,6 +195,312 @@ async function fixture(run, { spotifyCacheUsers = {}, spotifyScope = '', spotify
     fs.rmSync(target, { recursive: true, force: true });
   }
 }
+
+test('delayed Spotify playback response cannot reach a switched account', () => fixture(async ({ request, state, testSessions }) => {
+  let entered; let release;
+  const waiting = new Promise(resolve => { entered = resolve; });
+  const blocked = new Promise(resolve => { release = resolve; });
+  state.providerFetch = async url => {
+    const pathname = new URL(url).pathname;
+    if (pathname.endsWith('/api/token')) return providerJson({ access_token: 'old-access', expires_in: 3600 });
+    if (pathname === '/v1/me/player') { entered(); await blocked; return providerJson({ item: { name: 'A private track' } }); }
+    throw new Error('Unexpected provider endpoint');
+  };
+  const pending = request('/api/spotify/currently-playing', { headers: { Cookie: `rcrd_session=${sessionId}` } });
+  await waiting;
+  testSessions.get(sessionId).spotify = { refreshToken: 'new-refresh', userId: 'account-b', cache: new Map() };
+  release();
+  const response = await pending;
+  assert.equal(response.status, 409);
+  assert.doesNotMatch(response.body, /private track|old-access/);
+}));
+
+test('queued Spotify request is not sent under the previous account after a switch', () => fixture(async ({ request, state, testSessions }) => {
+  let entered; let release;
+  const waiting = new Promise(resolve => { entered = resolve; });
+  const blocked = new Promise(resolve => { release = resolve; });
+  let playerCalls = 0;
+  state.providerFetch = async url => {
+    const pathname = new URL(url).pathname;
+    if (pathname.endsWith('/api/token')) return providerJson({ access_token: 'old-access', expires_in: 3600 });
+    if (pathname === '/v1/me/player') { playerCalls++; entered(); await blocked; return providerJson({ item: { name: 'A private track' } }); }
+    throw new Error('Unexpected provider endpoint');
+  };
+  const headers = { Cookie: `rcrd_session=${sessionId}` };
+  const first = request('/api/spotify/currently-playing', { headers });
+  await waiting;
+  const account = testSessions.get(sessionId).spotify;
+  const firstQueue = account.requestQueue;
+  const second = request('/api/spotify/currently-playing', { headers });
+  for (let attempt = 0; attempt < 50 && account.requestQueue === firstQueue; attempt++) await new Promise(resolve => setImmediate(resolve));
+  const secondQueued = account.requestQueue !== firstQueue;
+  testSessions.get(sessionId).spotify = { refreshToken: 'new-refresh', userId: 'account-b', cache: new Map() };
+  release();
+  assert.equal(secondQueued, true);
+  assert.equal((await first).status, 409);
+  assert.equal((await second).status, 409);
+  assert.equal(playerCalls, 1);
+}));
+
+test('in-place Spotify identity change invalidates a delayed response', () => fixture(async ({ request, state, testSessions }) => {
+  let entered; let release;
+  const waiting = new Promise(resolve => { entered = resolve; });
+  const blocked = new Promise(resolve => { release = resolve; });
+  state.providerFetch = async url => {
+    const pathname = new URL(url).pathname;
+    if (pathname.endsWith('/api/token')) return providerJson({ access_token: 'old-access', expires_in: 3600 });
+    if (pathname === '/v1/me/player') { entered(); await blocked; return providerJson({ item: { name: 'A private track' } }); }
+    throw new Error('Unexpected provider endpoint');
+  };
+  const pending = request('/api/spotify/currently-playing', { headers: { Cookie: `rcrd_session=${sessionId}` } });
+  await waiting;
+  testSessions.get(sessionId).spotify.userId = 'account-b';
+  release();
+  const response = await pending;
+  assert.equal(response.status, 409);
+  assert.doesNotMatch(response.body, /private track/);
+}));
+
+test('removed session cannot receive an in-flight Spotify response', () => fixture(async ({ request, state, testSessions }) => {
+  let entered; let release;
+  const waiting = new Promise(resolve => { entered = resolve; });
+  const blocked = new Promise(resolve => { release = resolve; });
+  state.providerFetch = async url => {
+    const pathname = new URL(url).pathname;
+    if (pathname.endsWith('/api/token')) return providerJson({ access_token: 'old-access', expires_in: 3600 });
+    if (pathname === '/v1/me/player') { entered(); await blocked; return providerJson({ item: { name: 'A private track' } }); }
+    throw new Error('Unexpected provider endpoint');
+  };
+  const pending = request('/api/spotify/currently-playing', { headers: { Cookie: `rcrd_session=${sessionId}` } });
+  await waiting;
+  testSessions.delete(sessionId);
+  release();
+  const response = await pending;
+  assert.equal(response.status, 409);
+  assert.doesNotMatch(response.body, /private track/);
+}));
+
+test('delayed Spotify device and playback routes reject switched-account results', () => fixture(async ({ request, state, testSessions }) => {
+  const cookie = { Cookie: `rcrd_session=${sessionId}` };
+  for (const mode of ['devices', 'playback']) {
+    let entered; let release;
+    const waiting = new Promise(resolve => { entered = resolve; });
+    const blocked = new Promise(resolve => { release = resolve; });
+    const oldAccount = { refreshToken: 'old-refresh', userId: 'account-a', accessToken: 'old-access', expiresAt: Date.now() + 3600000 };
+    testSessions.get(sessionId).spotify = oldAccount;
+    state.providerFetch = async url => {
+      const pathname = new URL(url).pathname;
+      if (pathname === (mode === 'devices' ? '/v1/me/player/devices' : '/v1/me/player/pause')) { entered(); await blocked; return mode === 'devices' ? providerJson({ devices: [{ id: 'old-device', name: 'A private device' }] }) : new Response(null, { status: 204 }); }
+      throw new Error('Unexpected provider endpoint');
+    };
+    const pending = mode === 'devices' ? request('/api/spotify/devices', { headers: cookie }) : request('/api/spotify/playback', { method: 'POST', headers: { ...cookie, 'X-RCRD-Request': '1', 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'pause' }) });
+    await waiting;
+    testSessions.get(sessionId).spotify = { refreshToken: 'new-refresh', userId: 'account-b' };
+    release();
+    const response = await pending;
+    assert.equal(response.status, 409);
+    assert.doesNotMatch(response.body, /private device|old-device|"ok":true/);
+  }
+}));
+
+test('delayed Spotify liked write does not report old-account success after a switch', () => fixture(async ({ request, state, testSessions }) => {
+  let entered; let release;
+  const waiting = new Promise(resolve => { entered = resolve; });
+  const blocked = new Promise(resolve => { release = resolve; });
+  state.providerFetch = async url => {
+    const pathname = new URL(url).pathname;
+    if (pathname.endsWith('/api/token')) return providerJson({ access_token: 'old-access', expires_in: 3600 });
+    if (pathname === '/v1/me/library') { entered(); await blocked; return providerJson({}, 200); }
+    throw new Error('Unexpected provider endpoint');
+  };
+  const pending = request('/api/spotify/liked', { method: 'PUT', headers: { Cookie: `rcrd_session=${sessionId}`, 'X-RCRD-Request': '1', 'Content-Type': 'application/json' }, body: JSON.stringify({ uri: 'spotify:track:synthetic1', saved: true }) });
+  await waiting;
+  testSessions.get(sessionId).spotify = { refreshToken: 'new-refresh', userId: 'account-b', cache: new Map() };
+  release();
+  const response = await pending;
+  assert.equal(response.status, 409);
+  assert.doesNotMatch(response.body, /"ok":true|old-access/);
+}, { spotifyScope: 'user-library-modify' }));
+
+test('delayed Discogs identity cannot reach a switched account', () => fixture(async ({ request, state, testSessions }) => {
+  let entered; let release;
+  const waiting = new Promise(resolve => { entered = resolve; });
+  const blocked = new Promise(resolve => { release = resolve; });
+  state.providerFetch = async url => {
+    if (new URL(url).pathname === '/oauth/identity') { entered(); await blocked; return providerJson({ username: 'private-account-a' }); }
+    throw new Error('Unexpected provider endpoint');
+  };
+  const pending = request('/api/me', { headers: { Cookie: `rcrd_session=${sessionId}` } });
+  await waiting;
+  const session = testSessions.get(sessionId);
+  session.accessToken = 'account-b-token'; session.accessSecret = 'account-b-secret';
+  release();
+  const response = await pending;
+  assert.equal(response.status, 409);
+  assert.doesNotMatch(response.body, /private-account-a/);
+}));
+
+test('delayed Discogs collection write cannot report old-account success after a switch', () => fixture(async ({ request, state, testSessions }) => {
+  let entered; let release;
+  const waiting = new Promise(resolve => { entered = resolve; });
+  const blocked = new Promise(resolve => { release = resolve; });
+  state.providerFetch = async url => {
+    const pathname = new URL(url).pathname;
+    if (pathname === '/oauth/identity') return providerJson({ username: 'private-account-a' });
+    if (pathname.endsWith('/collection/folders/1/releases/42')) { entered(); await blocked; return providerJson({}, 200); }
+    throw new Error('Unexpected provider endpoint');
+  };
+  const pending = request('/api/collection', { method: 'POST', headers: { Cookie: `rcrd_session=${sessionId}`, 'X-RCRD-Request': '1', 'Content-Type': 'application/json' }, body: JSON.stringify({ release_id: 42 }) });
+  await waiting;
+  const session = testSessions.get(sessionId);
+  session.accessToken = 'account-b-token'; session.accessSecret = 'account-b-secret';
+  release();
+  const response = await pending;
+  assert.equal(response.status, 409);
+  assert.doesNotMatch(response.body, /private-account-a|"ok":true/);
+}));
+
+test('Discogs pagination stops before a second page after an account switch', () => fixture(async ({ request, state, testSessions }) => {
+  let entered; let release;
+  const waiting = new Promise(resolve => { entered = resolve; });
+  const blocked = new Promise(resolve => { release = resolve; });
+  let secondPageCalls = 0;
+  state.providerFetch = async url => {
+    const parsed = new URL(url);
+    if (parsed.pathname === '/oauth/identity') return providerJson({ username: 'private-account-a' });
+    if (parsed.pathname.endsWith('/collection/folders/0/releases')) {
+      if (parsed.searchParams.get('page') === '2') { secondPageCalls++; return providerJson({ releases: [], pagination: { pages: 2 } }); }
+      entered(); await blocked;
+      return providerJson({ releases: [{ instance_id: 1 }], pagination: { pages: 2 } });
+    }
+    throw new Error('Unexpected provider endpoint');
+  };
+  const pending = request('/api/collection', { headers: { Cookie: `rcrd_session=${sessionId}` } });
+  await waiting;
+  const session = testSessions.get(sessionId);
+  session.accessToken = 'account-b-token'; session.accessSecret = 'account-b-secret';
+  release();
+  const response = await pending;
+  assert.equal(response.status, 409);
+  assert.equal(secondPageCalls, 0);
+  assert.doesNotMatch(response.body, /private-account-a/);
+}));
+
+test('delayed Discogs wantlist write cannot report old-account success after a switch', () => fixture(async ({ request, state, testSessions }) => {
+  let entered; let release;
+  const waiting = new Promise(resolve => { entered = resolve; });
+  const blocked = new Promise(resolve => { release = resolve; });
+  state.providerFetch = async url => {
+    const pathname = new URL(url).pathname;
+    if (pathname === '/oauth/identity') return providerJson({ username: 'private-account-a' });
+    if (pathname.endsWith('/wants/42')) { entered(); await blocked; return providerJson({}, 200); }
+    throw new Error('Unexpected provider endpoint');
+  };
+  const pending = request('/api/wantlist', { method: 'POST', headers: { Cookie: `rcrd_session=${sessionId}`, 'X-RCRD-Request': '1', 'Content-Type': 'application/json' }, body: JSON.stringify({ release_id: 42 }) });
+  await waiting;
+  const session = testSessions.get(sessionId);
+  session.accessToken = 'account-b-token'; session.accessSecret = 'account-b-secret';
+  release();
+  const response = await pending;
+  assert.equal(response.status, 409);
+  assert.doesNotMatch(response.body, /private-account-a|"ok":true/);
+}));
+
+test('Spotify callback cannot restore credentials after sign-out during token exchange', () => fixture(async ({ request, state, testSessions }) => {
+  const cookie = { Cookie: `rcrd_session=${sessionId}` };
+  const started = await request('/auth/spotify/start', { headers: cookie });
+  const oauthState = new URL(started.headers.location).searchParams.get('state');
+  let entered; let release;
+  const waiting = new Promise(resolve => { entered = resolve; });
+  const blocked = new Promise(resolve => { release = resolve; });
+  state.providerFetch = async url => {
+    if (new URL(url).pathname.endsWith('/api/token')) { entered(); await blocked; return providerJson({ access_token: 'old-access', refresh_token: 'old-refresh', expires_in: 3600 }); }
+    throw new Error('Unexpected provider endpoint');
+  };
+  const pending = request(`/auth/spotify/callback?state=${oauthState}&code=old-code`, { headers: cookie });
+  await waiting;
+  await request('/api/spotify/disconnect', { method: 'POST', headers: { ...cookie, 'X-RCRD-Request': '1' } });
+  release();
+  assert.equal((await pending).status, 409);
+  assert.equal(testSessions.get(sessionId).spotify, null);
+}));
+
+test('player token response never returns the previous account token after a switch', () => fixture(async ({ request, state, testSessions }) => {
+  let entered; let release;
+  const waiting = new Promise(resolve => { entered = resolve; });
+  const blocked = new Promise(resolve => { release = resolve; });
+  state.providerFetch = async url => {
+    if (new URL(url).pathname.endsWith('/api/token')) { entered(); await blocked; return providerJson({ access_token: 'account-a-secret-token', expires_in: 3600 }); }
+    throw new Error('Unexpected provider endpoint');
+  };
+  const pending = request('/api/spotify/token', { headers: { Cookie: `rcrd_session=${sessionId}` } });
+  await waiting;
+  testSessions.get(sessionId).spotify = { refreshToken: 'new-refresh', userId: 'account-b', scope: 'streaming' };
+  release();
+  const response = await pending;
+  assert.equal(response.status, 409);
+  assert.doesNotMatch(response.body, /account-a-secret-token/);
+}, { spotifyScope: 'streaming' }));
+
+test('Spotify callback does not restore old credentials after sign-out during profile verification', () => fixture(async ({ request, state, testSessions }) => {
+  const cookie = { Cookie: `rcrd_session=${sessionId}` };
+  const started = await request('/auth/spotify/start', { headers: cookie });
+  const oauthState = new URL(started.headers.location).searchParams.get('state');
+  let entered; let release;
+  const waiting = new Promise(resolve => { entered = resolve; });
+  const blocked = new Promise(resolve => { release = resolve; });
+  state.providerFetch = async url => {
+    const pathname = new URL(url).pathname;
+    if (pathname.endsWith('/api/token')) return providerJson({ access_token: 'old-access', refresh_token: 'old-refresh', expires_in: 3600 });
+    if (pathname === '/v1/me') { entered(); await blocked; return providerJson({ id: 'account-a' }); }
+    throw new Error('Unexpected provider endpoint');
+  };
+  const pending = request(`/auth/spotify/callback?state=${oauthState}&code=old-code`, { headers: cookie });
+  await waiting;
+  assert.equal((await request('/api/spotify/disconnect', { method: 'POST', headers: { ...cookie, 'X-RCRD-Request': '1' } })).status, 200);
+  release();
+  assert.equal((await pending).status, 409);
+  assert.equal(testSessions.get(sessionId).spotify, null);
+}));
+
+test('Discogs authorization start does not restore pending consent after sign-out', () => fixture(async ({ request, state, testSessions }) => {
+  const cookie = { Cookie: `rcrd_session=${sessionId}` };
+  let entered; let release;
+  const waiting = new Promise(resolve => { entered = resolve; });
+  const blocked = new Promise(resolve => { release = resolve; });
+  state.providerFetch = async url => {
+    if (new URL(url).pathname.endsWith('/oauth/request_token')) { entered(); await blocked; return { ok: true, status: 200, text: async () => 'oauth_token=old-pending&oauth_token_secret=old-secret' }; }
+    throw new Error('Unexpected provider endpoint');
+  };
+  const pending = request('/auth/discogs/start', { headers: cookie });
+  await waiting;
+  assert.equal((await request('/api/discogs/disconnect', { method: 'POST', headers: { ...cookie, 'X-RCRD-Request': '1' } })).status, 200);
+  release();
+  assert.equal((await pending).status, 409);
+  assert.equal(testSessions.get(sessionId).requestToken, undefined);
+}));
+
+test('Discogs callback cannot restore credentials after sign-out during access exchange', () => fixture(async ({ request, state, testSessions }) => {
+  const cookie = { Cookie: `rcrd_session=${sessionId}` };
+  state.providerFetch = async url => {
+    if (new URL(url).pathname.endsWith('/oauth/request_token')) return { ok: true, status: 200, text: async () => 'oauth_token=pending-token&oauth_token_secret=pending-secret' };
+    throw new Error('Unexpected provider endpoint');
+  };
+  assert.equal((await request('/auth/discogs/start', { headers: cookie })).status, 302);
+  let entered; let release;
+  const waiting = new Promise(resolve => { entered = resolve; });
+  const blocked = new Promise(resolve => { release = resolve; });
+  state.providerFetch = async url => {
+    if (new URL(url).pathname.endsWith('/oauth/access_token')) { entered(); await blocked; return { ok: true, status: 200, text: async () => 'oauth_token=old-access&oauth_token_secret=old-secret' }; }
+    throw new Error('Unexpected provider endpoint');
+  };
+  const pending = request('/auth/discogs/callback?oauth_token=pending-token&oauth_verifier=verifier', { headers: cookie });
+  await waiting;
+  await request('/api/discogs/disconnect', { method: 'POST', headers: { ...cookie, 'X-RCRD-Request': '1' } });
+  release();
+  assert.equal((await pending).status, 409);
+  assert.equal(testSessions.get(sessionId).accessToken, undefined);
+}));
 
 test('admin restart rejects missing and cross-origin intent without launching a process', () => fixture(async ({ request, port }) => {
   const endpoint = '/api/admin/restart';
@@ -221,6 +539,7 @@ test('serves only public assets and keeps private fixture files inaccessible', (
   const manifest = await request('/manifest.webmanifest');
   assert.equal(manifest.status, 200);
   assert.match(manifest.headers['content-type'], /application\/manifest\+json/);
+  assert.match(manifest.headers['content-security-policy'], /manifest-src 'self'/);
   assert.equal(JSON.parse(manifest.body).name, 'RCRD synthetic');
   const spotifyLogo = await request('/assets/spotify-full-logo-white.svg');
   assert.equal(spotifyLogo.status, 200);
@@ -363,13 +682,15 @@ test('history imports preserve RCRD plays, deduplicate overlap, and stay monoton
   };
   state.historyParser = (archive, ledger) => {
     const kind = archive.toString('utf8');
+    const base = Date.parse('2024-01-01T00:00:00Z');
+    const oldEvents = Array.from({ length: 5 }, (_, index) => ({ uri, playedAt: base + index * 1000 }));
     const definitions = {
-      newer: { plays: 6, firstAt: '2024-01-01T00:00:00Z', lastAt: '2025-02-01T12:00:00Z', included: new Set([firstLocal]) },
-      older: { plays: 4, firstAt: '2024-06-01T00:00:00Z', lastAt: '2024-12-01T00:00:00Z', included: new Set([secondLocal]) },
-      newest: { plays: 7, firstAt: '2024-01-01T00:00:00Z', lastAt: '2025-03-01T12:00:00Z', included: new Set([firstLocal, secondLocal]) }
+      newer: { plays: 6, firstAt: '2024-01-01T00:00:00Z', lastAt: '2025-02-01T12:00:00Z', events: [...oldEvents, { uri, playedAt: firstLocal }], included: new Set([firstLocal]) },
+      older: { plays: 4, firstAt: '2024-06-01T00:00:00Z', lastAt: '2025-03-01T12:00:00Z', events: [1, 2, 3].map(index => ({ uri, playedAt: base + index * 100000 })).concat({ uri, playedAt: secondLocal }), included: new Set([secondLocal]) },
+      newest: { plays: 7, firstAt: '2024-01-01T00:00:00Z', lastAt: '2025-03-01T12:00:00Z', events: [...oldEvents, { uri, playedAt: firstLocal }, { uri, playedAt: secondLocal }], included: new Set([firstLocal, secondLocal]) }
     };
     const item = definitions[kind];
-    return { version: 1, username: 'synthetic-user', totalPlays: item.plays, firstAt: item.firstAt, lastAt: item.lastAt, tracks: [{ uri, title: 'Merged song', artist: 'Artist', album: 'Album', plays: item.plays }], matchedRecentEvents: ledger.filter(event => item.included.has(event.playedAt)).map(event => `${event.uri}:${event.playedAt}`) };
+    return { version: 1, username: 'synthetic-user', totalPlays: item.plays, firstAt: item.firstAt, lastAt: item.lastAt, tracks: [{ uri, title: 'Merged song', artist: 'Artist', album: 'Album', plays: item.plays }], events: item.events, matchedRecentEvents: ledger.filter(event => item.included.has(event.playedAt)).map(event => `${event.uri}:${event.playedAt}`) };
   };
   const cookie = { Cookie: `rcrd_session=${sessionId}` };
   const mutation = { ...cookie, Origin: `http://127.0.0.1:${port}`, 'X-RCRD-Request': '1', 'Content-Type': 'application/zip' };
@@ -383,12 +704,40 @@ test('history imports preserve RCRD plays, deduplicate overlap, and stay monoton
   assert.equal((await importKind('newer')).status, 200);
   assert.equal(await count(), 7, 'reimporting the same ZIP is idempotent');
   assert.equal((await importKind('older')).status, 200);
-  assert.equal(await count(), 7, 'an older import cannot absorb a matched RCRD event without a corresponding imported-count increase');
+  assert.equal(await count(), 10, 'distinct imported evidence raises the legacy floor and the later exact overlap is absorbed');
   assert.equal((await importKind('newest')).status, 200);
-  assert.equal(await count(), 7, 'a later ZIP absorbs the remaining RCRD event without double counting it');
+  assert.equal(await count(), 10, 'a later overlapping ZIP cannot inflate the event union');
   const ledger = JSON.parse(fs.readFileSync(path.join(historyRoot, `${userKey}.recent.json`), 'utf8'));
   assert.equal(ledger.version, 2);
   assert.deepEqual(ledger.events, []);
+}));
+
+test('disjoint and overlapping ZIPs add each new event once for a fresh account', () => fixture(async ({ request, state, port }) => {
+  const uri = 'spotify:track:unionTrack';
+  let recentItems = [];
+  state.providerFetch = async url => {
+    const pathname = new URL(url).pathname;
+    if (pathname.endsWith('/api/token')) return providerJson({ access_token: 'synthetic-access', expires_in: 3600 });
+    if (pathname === '/v1/me') return providerJson({ id: 'synthetic-user' });
+    if (pathname === '/v1/me/player/recently-played') return providerJson({ items: recentItems });
+    throw new Error('Unexpected provider request');
+  };
+  const base = Date.parse('2025-01-01T00:00:00Z');
+  state.historyParser = archive => {
+    const offsets = { first: [0, 1], disjoint: [2, 3, 4], overlap: [1, 4, 5] }[archive.toString('utf8')];
+    const events = offsets.map(offset => ({ uri, playedAt: base + offset * 60000 }));
+    return { version: 1, username: 'synthetic-user', totalPlays: events.length, firstAt: new Date(events[0].playedAt).toISOString(), lastAt: new Date(events.at(-1).playedAt).toISOString(), tracks: [{ uri, title: 'Union song', artist: 'Artist', album: 'Album', plays: events.length }], events };
+  };
+  const headers = { Cookie: `rcrd_session=${sessionId}`, Origin: `http://127.0.0.1:${port}`, 'X-RCRD-Request': '1', 'Content-Type': 'application/zip' };
+  for (const [label, expected] of [['first', 2], ['disjoint', 5], ['overlap', 6], ['first', 6], ['overlap', 6]]) {
+    const response = await request('/api/spotify/history', { method: 'POST', headers, body: Buffer.from(label) });
+    assert.equal(response.status, 200, response.body);
+    assert.equal(JSON.parse(response.body).totalPlays, expected);
+  }
+  recentItems = [{ track: { uri }, played_at: new Date(base + 5 * 60000).toISOString() }];
+  assert.equal((await request('/api/spotify/recent', { method: 'POST', headers: { ...headers, 'Content-Type': 'application/json' } })).status, 200);
+  const counts = await request(`/api/spotify/play-counts?uri=${encodeURIComponent(uri)}`, { headers });
+  assert.equal(JSON.parse(counts.body).counts[uri], 6, 'a later recent-play sync does not add an already imported play');
 }));
 
 test('listening history storage stays isolated when the authenticated Spotify user changes', () => fixture(async ({ request, state, runtime, testSessions }) => {
@@ -1061,8 +1410,12 @@ test('Mix playlist save requires private scope, validates songs, and uses the ve
   const save = body => request('/api/spotify/mix-playlist', { method: 'POST', headers, body: JSON.stringify(body) });
   assert.equal((await save({ name: 'My Mix', uris })).status, 403);
   assert.equal((await request('/api/spotify/playlists', { method: 'POST', headers: { Cookie: headers.Cookie, 'Content-Type': 'application/json' }, body: JSON.stringify({ name: 'Private', uris: [uris[0]] }) })).status, 403);
-  assert.equal((await request('/api/spotify/playlists', { method: 'POST', headers, body: JSON.stringify({ name: 'Private', uris: [uris[0]] }) })).status, 403);
+  const missingPermission = await request('/api/spotify/playlists', { method: 'POST', headers, body: JSON.stringify({ name: 'Private', uris: [uris[0]] }) });
+  assert.equal(missingPermission.status, 403);
+  assert.equal(JSON.parse(missingPermission.body).needsSpotifyAuthorization, true);
+  assert.equal(JSON.parse((await request('/api/spotify/status', { headers })).body).canModifyPrivatePlaylists, false);
   testSessions.get(sessionId).spotify.scope = 'playlist-modify-private';
+  assert.equal(JSON.parse((await request('/api/spotify/status', { headers })).body).canModifyPrivatePlaylists, true);
   assert.equal((await save({ name: 'My Mix', uris: [uris[0], uris[0], ...uris.slice(2)] })).status, 400);
   assert.equal(paths.includes('/v1/me/playlists'), false);
   const saved = await save({ name: 'My Mix', uris }); assert.equal(saved.status, 200, saved.body); assert.deepEqual(JSON.parse(saved.body), { id: 'private123', name: 'My Mix', url: 'https://open.spotify.com/playlist/private123' });
@@ -1305,12 +1658,15 @@ test('Spotify authorization requests and persists library-modify scope; old sess
   assert.ok(!authorize.searchParams.get('scope').split(' ').includes('user-read-email'));
   assert.equal(authorize.searchParams.get('show_dialog'), 'true');
   state.providerFetch = async url => {
-    if (!new URL(url).pathname.endsWith('/api/token')) throw new Error('Unexpected provider endpoint');
+    const pathname = new URL(url).pathname;
+    if (pathname === '/v1/me') return providerJson({ id: 'synthetic-user' });
+    if (!pathname.endsWith('/api/token')) throw new Error('Unexpected provider endpoint');
     return providerJson({ access_token: 'synthetic-access', refresh_token: 'synthetic-new-refresh', expires_in: 3600, scope: 'user-library-read user-library-modify' });
   };
   const callback = await request(`/auth/spotify/callback?state=${encodeURIComponent(authorize.searchParams.get('state'))}&code=synthetic-code`, { headers: cookie });
   assert.equal(callback.status, 302);
   assert.equal(JSON.parse((await request('/api/spotify/status', { headers: cookie })).body).canModifyLibrary, true);
+  assert.equal(JSON.parse((await request('/api/spotify/status', { headers: cookie })).body).accountMarker, crypto.createHash('sha256').update('synthetic-user').digest('hex').slice(0, 16));
   const payload = JSON.parse(fs.readFileSync(path.join(runtime, 'oauth-sessions.enc'), 'utf8'));
   const decipher = crypto.createDecipheriv('aes-256-gcm', key, Buffer.from(payload.iv, 'base64'));
   decipher.setAuthTag(Buffer.from(payload.tag, 'base64'));

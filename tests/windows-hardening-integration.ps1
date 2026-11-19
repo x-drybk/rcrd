@@ -59,6 +59,10 @@ try {
   New-Item -ItemType Directory -Path $data -Force | Out-Null
   Copy-Item -LiteralPath $source -Destination $server
   Copy-Item -LiteralPath (Join-Path $repository 'package.json') -Destination (Join-Path $root 'package.json')
+  New-Item -ItemType Directory -Path (Join-Path $root 'scripts') -Force | Out-Null
+  foreach ($module in @('History-Event-Index.cjs', 'History-Transaction.cjs')) {
+    Copy-Item -LiteralPath (Join-Path $repository "scripts/$module") -Destination (Join-Path $root "scripts/$module")
+  }
   Copy-Item -LiteralPath $preloadSource -Destination $preload
   [IO.File]::WriteAllText((Join-Path $root '.env'), "PORT=$port`nDISCOGS_CONSUMER_KEY=synthetic-key`nDISCOGS_CONSUMER_SECRET=synthetic-secret`n")
 

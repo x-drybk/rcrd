@@ -6,7 +6,8 @@ RCRD is intentionally a local-first application and is not designed for public, 
 
 - The server binds to loopback by default (`127.0.0.1`)
 - OAuth credentials and runtime state are stored under `.data` on the local machine
-- Optional imported Spotify listening-count summaries and a local ledger of recent Spotify track URIs/play timestamps are stored under `.data/listening-history` as account-derived data; they are not encrypted at rest. The imported ZIP is deleted from RCRD's temporary folder after processing, but the user's original download is untouched.
+- The Windows launcher restricts a current-user-owned `.env` file to the current Windows account, SYSTEM, and Administrators before starting RCRD. The `npm start` path does not apply this protection.
+- Optional imported Spotify listening-count summaries, a hashed play-event index, and a local ledger of recent Spotify track URIs/play timestamps are stored under `.data/listening-history` as account-derived data; they are not encrypted at rest. The imported ZIP is deleted from RCRD's temporary folder after processing, but the user's original download is untouched.
 - Optional Genius lyrics use a server-side Client Access Token (`GENIUS_ACCESS_TOKEN`) from `.env` for song matching. When you request Lyrics, RCRD sends the current title and artist to Genius and loads a sandboxed Genius-hosted view if available. That browser request can reveal your IP address to Genius. RCRD does not store lyric text.
 - Browser requests must present a valid local session and same-origin request headers for account-changing actions
 - Public source sharing on GitHub is acceptable only as a local-run project, not as a hosted service

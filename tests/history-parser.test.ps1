@@ -31,6 +31,26 @@ try {
   $matchedSummary = ConvertFrom-Json -InputObject ([IO.File]::ReadAllText($outputPath))
   if ($matchedSummary.matchedRecentEvents.Count -ne 1 -or $matchedSummary.matchedRecentEvents[0] -ne 'spotify:track:trackone:1735732800000') { throw 'The parser did not identify exact local ledger overlap.' }
 
+  $duplicatePath = Join-Path $temporary 'duplicates.zip'
+  $duplicateArchive = [IO.Compression.ZipFile]::Open($duplicatePath, [IO.Compression.ZipArchiveMode]::Create)
+  try {
+    foreach ($part in 1..2) {
+      $entry = $duplicateArchive.CreateEntry("Streaming_History_Audio_$part.json")
+      $writer = [IO.StreamWriter]::new($entry.Open(), [Text.Encoding]::UTF8)
+      try {
+        if ($part -eq 1) { $writer.Write('[{"ts":"2025-01-01T12:00:00Z","username":"synthetic-user","ms_played":60000,"spotify_track_uri":"spotify:track:trackone","master_metadata_track_name":"One","master_metadata_album_artist_name":"Artist"},{"ts":"2025-01-01T12:00:00Z","username":"synthetic-user","ms_played":61000,"spotify_track_uri":"spotify:track:trackone","master_metadata_track_name":"One","master_metadata_album_artist_name":"Artist"}]') }
+        else { $writer.Write('[{"ts":"2025-01-01T12:00:00Z","username":"synthetic-user","ms_played":62000,"spotify_track_uri":"spotify:track:trackone","master_metadata_track_name":"One","master_metadata_album_artist_name":"Artist"},{"ts":"2025-01-01T12:00:00Z","username":"synthetic-user","ms_played":60000,"spotify_track_uri":"spotify:track:tracktwo","master_metadata_track_name":"Two","master_metadata_album_artist_name":"Artist"}]') }
+      } finally { $writer.Dispose() }
+    }
+  } finally { $duplicateArchive.Dispose() }
+  $duplicateOutput = Join-Path $temporary 'duplicate-summary.json'
+  $duplicateEvents = Join-Path $temporary 'duplicate-events.raw'
+  & $parser -ArchivePath $duplicatePath -OutputPath $duplicateOutput -EventPath $duplicateEvents
+  $deduplicated = ConvertFrom-Json -InputObject ([IO.File]::ReadAllText($duplicateOutput))
+  if ($deduplicated.totalPlays -ne 2 -or $deduplicated.tracks.Count -ne 2 -or ([IO.File]::ReadAllBytes($duplicateEvents)).Length -ne 50) { throw 'Same-file or cross-file duplicate plays were counted more than once.' }
+  & node -e "const fs=require('fs'),i=require(process.argv[2]);const x=i.fromRaw(fs.readFileSync(process.argv[1]));if(i.unpack(x).length!==2||i.countsByTrack(x).get(i.trackKey('spotify:track:trackone'))!==1)process.exit(1)" $duplicateEvents (Join-Path (Split-Path -Parent $PSScriptRoot) 'scripts\History-Event-Index.cjs')
+  if ($LASTEXITCODE -ne 0) { throw 'The parser event digests do not match the Node event index.' }
+
   $anonymousPath = Join-Path $temporary 'anonymous.zip'
   $anonymous = [IO.Compression.ZipFile]::Open($anonymousPath, [IO.Compression.ZipArchiveMode]::Create)
   try {

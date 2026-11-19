@@ -23,6 +23,8 @@ test('isolated Windows server restart returns an accepted response and a replace
   fs.copyFileSync(path.join(__dirname, '..', 'server.js'), path.join(root, 'server.js'));
   fs.copyFileSync(path.join(__dirname, '..', 'package.json'), path.join(root, 'package.json'));
   fs.copyFileSync(path.join(__dirname, '..', 'scripts', 'Restart-RCRD.cjs'), path.join(root, 'scripts', 'Restart-RCRD.cjs'));
+  fs.copyFileSync(path.join(__dirname, '..', 'scripts', 'History-Event-Index.cjs'), path.join(root, 'scripts', 'History-Event-Index.cjs'));
+  fs.copyFileSync(path.join(__dirname, '..', 'scripts', 'History-Transaction.cjs'), path.join(root, 'scripts', 'History-Transaction.cjs'));
   fs.writeFileSync(path.join(root, 'index.html'), '<h1>Synthetic RCRD</h1>');
   const dataDirectory = path.join(root, '.data');
   fs.mkdirSync(dataDirectory);

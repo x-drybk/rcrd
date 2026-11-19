@@ -211,6 +211,28 @@ function Ensure-RcrdPrivateDirectory {
   Assert-RcrdPrivateDirectorySecurity $Path -AllowInherited:$AllowInherited
 }
 
+function Ensure-RcrdPrivateEnvFile {
+  $path = Join-Path $ProjectRoot '.env'
+  if (-not (Test-Path -LiteralPath $path)) { return }
+  $entry = Get-Item -LiteralPath $path -Force
+  if ($entry.PSIsContainer -or ($entry.Attributes -band [System.IO.FileAttributes]::ReparsePoint)) { throw 'RCRD cannot use a linked or non-file .env location.' }
+  $currentUser = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
+  $existing = Get-Acl -LiteralPath $path
+  if ($existing.GetOwner([System.Security.Principal.SecurityIdentifier]).Value -ne $currentUser.Value) { throw 'RCRD .env must be owned by the current Windows account.' }
+  $allowed = @($currentUser.Value, 'S-1-5-18', 'S-1-5-32-544')
+  $extra = @($existing.GetAccessRules($true, $true, [System.Security.Principal.SecurityIdentifier]) | Where-Object { $_.AccessControlType -eq [System.Security.AccessControl.AccessControlType]::Allow -and $_.IdentityReference.Value -notin $allowed })
+  if (-not $existing.AreAccessRulesProtected -or $extra.Count) {
+    $security = New-Object System.Security.AccessControl.FileSecurity
+    $security.SetAccessRuleProtection($true, $false)
+    foreach ($sid in @($currentUser, [System.Security.Principal.SecurityIdentifier]'S-1-5-18', [System.Security.Principal.SecurityIdentifier]'S-1-5-32-544')) {
+      $security.AddAccessRule([System.Security.AccessControl.FileSystemAccessRule]::new($sid, [System.Security.AccessControl.FileSystemRights]::FullControl, [System.Security.AccessControl.AccessControlType]::Allow))
+    }
+    Set-Acl -LiteralPath $path -AclObject $security
+  }
+  $verified = Get-Acl -LiteralPath $path
+  if (-not $verified.AreAccessRulesProtected -or @($verified.GetAccessRules($true, $true, [System.Security.Principal.SecurityIdentifier]) | Where-Object { $_.AccessControlType -eq [System.Security.AccessControl.AccessControlType]::Allow -and $_.IdentityReference.Value -notin $allowed }).Count) { throw 'RCRD could not protect .env credentials.' }
+}
+
 function Test-RcrdFirefoxProfileInUse {
   param([string]$Profile)
   $lockPath = Join-Path $Profile 'parent.lock'
@@ -479,6 +501,7 @@ if (-not (Get-Command node -ErrorAction SilentlyContinue)) {
 }
 
 Ensure-RcrdPrivateDirectory $DataDirectory
+Ensure-RcrdPrivateEnvFile
 Write-Host 'Starting RCRD...'
 $started = Start-Process -FilePath 'node' `
   -ArgumentList @("`"$ServerFile`"") `

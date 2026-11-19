@@ -1,7 +1,8 @@
 param(
   [Parameter(Mandatory = $true)][string]$ArchivePath,
   [Parameter(Mandatory = $true)][string]$OutputPath,
-  [string]$LedgerPath
+  [string]$LedgerPath,
+  [string]$EventPath
 )
 
 $ErrorActionPreference = 'Stop'
@@ -16,6 +17,13 @@ $minimumPlayMs = 30000
 $tracks = @{}
 $ledgerEvents = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
 $matchedLedgerEvents = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+$seenEvents = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+$eventStream = $null
+$hash = $null
+if ($EventPath) {
+  $eventStream = [IO.File]::Open($EventPath, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::None)
+  $hash = [Security.Cryptography.SHA256]::Create()
+}
 if ($LedgerPath) {
   $ledger = ConvertFrom-Json -InputObject ([IO.File]::ReadAllText($LedgerPath, [Text.Encoding]::UTF8))
   if ($ledger -isnot [array] -or $ledger.Count -gt 100000) { throw 'The local recent-play ledger is invalid.' }
@@ -67,20 +75,33 @@ try {
         $title = [string]$event.master_metadata_track_name
         $artist = [string]$event.master_metadata_album_artist_name
         if (-not $title.Trim() -or -not $artist.Trim()) { continue }
+        $playedAtMs = $playedAt.ToUnixTimeMilliseconds()
+        $eventKey = "$uri`:$playedAtMs"
+        if (-not $seenEvents.Add($eventKey)) { continue }
         if (-not $tracks.ContainsKey($uri)) {
           if ($tracks.Count -ge $maximumTracks) { throw 'The archive contains too many distinct tracks.' }
           $tracks[$uri] = @{ uri = $uri; title = $title.Substring(0, [Math]::Min(180, $title.Length)); artist = $artist.Substring(0, [Math]::Min(120, $artist.Length)); album = ([string]$event.master_metadata_album_album_name).Substring(0, [Math]::Min(180, ([string]$event.master_metadata_album_album_name).Length)); plays = 0 }
         }
         $tracks[$uri].plays++
         $totalPlays++
-        $eventKey = "$uri`:$($playedAt.ToUnixTimeMilliseconds())"
+        if ($eventStream) {
+          $trackDigest = $hash.ComputeHash([Text.Encoding]::UTF8.GetBytes("$uri`0"))
+          $eventStream.Write($trackDigest, 0, 16)
+          $timestampBytes = [BitConverter]::GetBytes([long]$playedAtMs)
+          $eventStream.Write($timestampBytes, 0, 8)
+          $eventStream.WriteByte(0)
+        }
         if ($ledgerEvents.Contains($eventKey)) { [void]$matchedLedgerEvents.Add($eventKey) }
         if ($playedAt -lt $firstAt) { $firstAt = $playedAt }
         if ($playedAt -gt $lastAt) { $lastAt = $playedAt }
       }
     } finally { $reader.Dispose() }
   }
-} finally { $archive.Dispose() }
+} finally {
+  $archive.Dispose()
+  if ($eventStream) { $eventStream.Dispose() }
+  if ($hash) { $hash.Dispose() }
+}
 
 if ($usernames.Count -gt 1) { throw 'The archive identifies more than one Spotify account.' }
 if ($totalPlays -eq 0) { throw 'No qualifying music plays were found in this archive.' }

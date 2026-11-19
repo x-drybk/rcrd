@@ -104,10 +104,10 @@ function createFixture(root, { connected = true, fontManifest: suppliedFontManif
       if (p === '/api/lyrics/genius') return json({ id: 123, title: current.name, url: 'https://genius.com/songs/123' });
       if (p === '/api/spotify/play-counts') return json({ counts: Object.fromEntries((body.tracks || []).map((t, i) => [t.uri, 18 + i * 7])), matches: Object.fromEntries((body.tracks || []).map(t => [t.uri, 'exact'])), lastSynced: Date.now() });
       if (p === '/api/spotify/liked') {
-        if (request.method() === 'GET') return json({ saved: (url.searchParams.get('uris') || '').split(',').map(uri => liked.has(uri)) });
+        if (request.method() === 'GET') return json({ saved: url.searchParams.has('uris') ? (url.searchParams.get('uris') || '').split(',').map(uri => liked.has(uri)) : liked.has(url.searchParams.get('uri')) });
         const uris = body.uris || (body.uri ? [body.uri] : []);
-        for (const uri of uris) request.method() === 'DELETE' ? liked.delete(uri) : liked.add(uri);
-        return json({ ok: true, saved: request.method() !== 'DELETE' });
+        for (const uri of uris) body.saved === false || request.method() === 'DELETE' ? liked.delete(uri) : liked.add(uri);
+        return json({ ok: true, saved: body.saved !== false && request.method() !== 'DELETE' });
       }
       if (p === '/api/spotify/currently-playing') return json(playback());
       if (p === '/api/spotify/devices') return json({ devices: [{ id: 'rcrd_demo_player', name: 'RCRD · Spotify', is_active: device === 'rcrd_demo_player', is_restricted: false }, { id: 'demo_speaker', name: 'Living room speaker', is_active: device === 'demo_speaker', is_restricted: false }] });
