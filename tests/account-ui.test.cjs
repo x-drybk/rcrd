@@ -1701,6 +1701,8 @@ test('About closes on its backdrop but stays open for content and dialog-surface
   assert.match(source, /querySelector\('#aboutDialog'\)\.addEventListener\('pointerdown',handleAboutDialogBackdropPointer\)/);
   assert.match(source, /querySelector\('#spotifyMixDialog'\)\.addEventListener\('pointerdown',handleAboutDialogBackdropPointer\)/);
   assert.match(source, /querySelector\('#spotifyCreatePlaylistDialog'\)\.addEventListener\('pointerdown',handleAboutDialogBackdropPointer\)/);
+  assert.match(source, /querySelector\('#collectionNotesDialog'\)\.addEventListener\('pointerdown',handleAboutDialogBackdropPointer\)/);
+  assert.match(source, /querySelector\('#pressingCompareDialog'\)\.addEventListener\('pointerdown',handleAboutDialogBackdropPointer\)/);
 });
 
 test('mobile Settings avatar follows the account image and disconnected placeholder', () => {
@@ -3469,6 +3471,54 @@ test('Previous uses the active local player rather than the server', async () =>
   assert.deepEqual(calls, ['previous']);
   assert.equal(h.node('#previousButton').attributes['aria-busy'], 'false');
   assert.notEqual(h.node('#nextButton').attributes['aria-busy'], 'true');
+});
+
+test('Previous restarts a track at 15 seconds, then skips on the next click', async () => {
+  const calls = [];
+  const h = harness(() => { throw new Error('The server should not receive a local playback command'); });
+  h.load('activeLocalSpotifyPlayer', 'runPlaybackAction');
+  let position = 15000;
+  h.context.localPlayer = {
+    getCurrentState: async () => ({ position, paused: false }),
+    seek: async value => { calls.push(['seek', value]); position = value; },
+    previousTrack: async () => { calls.push(['previous']); }
+  };
+  h.run("spotifyPlayer=localPlayer;spotifyDeviceId='synthetic-device';spotifyDurationMs=180000");
+  const first = h.run("runPlaybackAction('previous')");
+  const second = h.run("runPlaybackAction('previous')");
+  await Promise.all([first, second]);
+  assert.deepEqual(calls, [['seek', 0], ['previous']]);
+  assert.equal(h.node('#previousButton').attributes['aria-busy'], 'false');
+});
+
+test('Previous skips to the prior track before 15 seconds', async () => {
+  const calls = [];
+  const h = harness(() => { throw new Error('The server should not receive a local playback command'); });
+  h.load('activeLocalSpotifyPlayer', 'runPlaybackAction');
+  h.context.localPlayer = {
+    getCurrentState: async () => ({ position: 14999, paused: false }),
+    seek: async () => { calls.push('seek'); },
+    previousTrack: async () => { calls.push('previous'); }
+  };
+  h.run("spotifyPlayer=localPlayer;spotifyDeviceId='synthetic-device'");
+  await h.run("runPlaybackAction('previous')");
+  assert.deepEqual(calls, ['previous']);
+});
+
+test('Previous uses tracked progress on another device, including with Repeat enabled', async () => {
+  const commands = [];
+  const h = harness(async (_url, options) => {
+    commands.push(JSON.parse(options.body));
+    return { ok: true, json: async () => ({ ok: true }) };
+  });
+  h.load('spotifyPlaybackRequest', 'activeLocalSpotifyPlayer', 'runPlaybackAction');
+  h.context.updateProgress = position => h.run(`spotifyPositionMs=${position}`);
+  h.run("spotifyTargetDeviceId='other-device';spotifyPositionMs=16000;spotifyDurationMs=180000;repeatMode='track'");
+  await h.run("runPlaybackAction('previous')");
+  await h.run("runPlaybackAction('previous')");
+  assert.deepEqual(commands.map(({ action, position_ms, device_id }) => [action, position_ms, device_id]), [
+    ['seek', 0, 'other-device'], ['previous', undefined, 'other-device']
+  ]);
 });
 
 test('Shuffle exposes a clear on/off state without losing its availability hint', () => {
