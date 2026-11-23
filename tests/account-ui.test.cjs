@@ -43,7 +43,7 @@ function harness(fetch = async () => ({ ok: true, json: async () => ({}) }), ext
     setSidebarPlaylistOptions() {},
     renderListeningDiscogsSuggestions() {}, setSong() {}, closeLyricsDialog() {}, updatePlaybackModes() {}, loadSpotifyDevices() {}, syncCurrentSpotifyTrack() {},
     updateProgress() {}, renderPlayer() {}, updateHomeRecommendations() {},
-    purgeStoredDiscogsRecords() {}, restoreBrowsingContext() {}, resetCreatePlaylistUi() {},
+    purgeStoredDiscogsRecords() {}, restoreBrowsingContext() {}, resetCreatePlaylistUi() {}, resetEditPlaylistUi() {}, updateEditPlaylistButton() {},
     sortRecords: records => records, spotifyAlbumCard: record => `<article>${record.title}</article>`, discogsDataCredit: () => '',
     renderPagination() {}, syncThemedSelect() {}, syncSpotifySortControls() {}, showToast() {}, scheduleSpotifyPlayCounts() {}, resetSpotifyPlayCounts() {}, spotifyPlayCounts: new Map(), ...extra
   });
@@ -56,7 +56,7 @@ function harness(fetch = async () => ({ ok: true, json: async () => ({}) }), ext
     spotifyDeviceId=null,spotifyTargetDeviceId=null,spotifyPlayerTransfer=null,spotifyTargetSupportsVolume=true,spotifyDeviceRequestRevision=0,spotifyDeviceRefreshTimer=null,spotifyDeviceRefreshBusy=0,spotifyDeviceRefreshEnabled=false,availableSpotifyDevices=new Map(),spotifySyncTimer=null,spotifyProgressTimer=null,spotifyPlayerReadyTimer=null,spotifyPlayer=null,spotifyPlayerConnectFailed=false,spotifyDurationMs=0,spotifyPositionMs=0,spotifyProgressUpdatedAt=0,spotifyPlaybackStateRevision=0,spotifySdkStateRevision=0,
     spotifyHealthConnection=null,spotifyCanStream=null,spotifyPlayerState='waiting',spotifyPlayerIssue='',spotifyActiveDevice='Not checked',spotifyPlayerAuthRecoveryAttempted=false,spotifyPlaybackSyncGeneration=null,spotifyPlaybackSyncAgain=false,ambientLastActivity=Date.now(),
     spotifySkipQueue=Promise.resolve(),spotifySkipPending=0,spotifySkipBusy={next:0,previous:0},spotifyToggleQueue=Promise.resolve(),spotifyTogglePending=0,spotifyModeQueue=Promise.resolve(),spotifyPlaybackStartPending=0,recentTracksData=[],playing=false,
-    spotifyLibraryPage=1,spotifyPageSize=24,spotifyLibraryMode='grid',spotifyLibrarySort='recent',spotifyPlaylistSequence=0,
+    spotifyLibraryPage=1,spotifyPageSize=24,spotifyLibraryMode='grid',spotifyLibrarySort='recent',spotifyPlaylistSequence=0,spotifyEditablePlaylistIds=new Set(),
     spotifySearchMode='library',spotifySearchSequence=0,spotifySearchTimer=null,spotifySearchCompletion=null,collectionSpotifyLookup=null,spotifyCatalogResults=[],spotifyCatalogAlbumView=null,volume=0.65,
     shuffleEnabled=false,repeatMode='off',spotifyHasContext=false,shuffleRequestPending=false,shuffleRevision=0,repeatRequestPending=false,repeatRevision=0,
     listeningHistoryRevision=0,listeningHistoryBusy=false,listeningHistoryPage=1,listeningHistorySearchTimer=null;
@@ -180,7 +180,7 @@ test('playlist picker searches songs and keeps a unique removable selection', as
   const requested = [];
   const h = harness(async url => { requested.push(url); return { ok: true, json: async () => ({ tracks: { items: [{ uri: 'spotify:track:1234567890123456789012', name: 'A song', artists: [{ name: 'An artist' }], album: { name: 'An album', images: [] } }] } }) }; });
   h.run("let createPlaylistSongs=[],createPlaylistSearchResults=[],createPlaylistSearchSequence=0;");
-  h.load('updateCreatePlaylistSubmit', 'renderCreatePlaylistSongs', 'renderCreatePlaylistSearchResults', 'searchCreatePlaylistSongs', 'addCreatePlaylistSong', 'removeCreatePlaylistSong');
+  h.load('updateCreatePlaylistSubmit', 'renderCreatePlaylistSongs', 'renderCreatePlaylistSearchResults', 'findPlaylistSongs', 'searchCreatePlaylistSongs', 'addCreatePlaylistSong', 'removeCreatePlaylistSong');
   h.node('#spotifyCreatePlaylistName').value = 'Road trip';
   h.node('#spotifyCreatePlaylistSearch').value = 'A song';
   await h.run('searchCreatePlaylistSongs()');

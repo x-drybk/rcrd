@@ -15,6 +15,7 @@ const {createFixture,ORIGIN}=require('../walkthrough/source/demo-fixture.cjs');
     const page=await context.newPage();const errors=[];
     page.on('pageerror',error=>errors.push(error.message));
     await page.goto(ORIGIN);
+    await page.evaluate(() => document.fonts.ready);
     await page.waitForFunction(()=>spotifyConnected&&spotifyHomeRecommendations.length>0);
     assert.equal(await page.locator('#recommendations .home-album-link').count(),0);
     await page.locator('#recommendations .home-album-cover').first().press('Enter');
@@ -33,12 +34,14 @@ const {createFixture,ORIGIN}=require('../walkthrough/source/demo-fixture.cjs');
     assert.equal(await owned.locator('.spotify-discogs').count(),0);
     assert.equal(await owned.locator('.spotify-collection-status').count(),1);
     assert.equal(await owned.locator('.shelf-badges').count(),0);
-    const ownedPlay=await owned.locator('.spotify-play-result').boundingBox();
-    const otherPlay=await unowned.locator('.spotify-play-result').boundingBox();
-    assert.ok(Math.abs(ownedPlay.y-otherPlay.y)<1,'collection match does not push Play down');
-    const status=await owned.locator('.spotify-collection-status').boundingBox();
-    const action=await unowned.locator('.spotify-discogs').boundingBox();
-    assert.ok(Math.abs(status.y-action.y)<1,'collection status occupies the Discogs action slot');
+    const geometry=await page.evaluate(async()=>{
+      await new Promise(resolve=>requestAnimationFrame(resolve));
+      const [owned,unowned]=document.querySelectorAll('#recommendations .album-card');
+      const box=(card,selector)=>card.querySelector(selector).getBoundingClientRect().toJSON();
+      return {ownedPlay:box(owned,'.spotify-play-result'),otherPlay:box(unowned,'.spotify-play-result'),status:box(owned,'.spotify-collection-status'),action:box(unowned,'.spotify-discogs')};
+    });
+    assert.ok(Math.abs(geometry.ownedPlay.y-geometry.otherPlay.y)<1,`collection match does not push Play down (${geometry.ownedPlay.y} vs ${geometry.otherPlay.y})`);
+    assert.ok(Math.abs(geometry.status.y-geometry.action.y)<1,`collection status occupies the Discogs action slot (${geometry.status.y} vs ${geometry.action.y})`);
     await page.evaluate(()=>{
       homeDiscoveryMode='top';spotifyHomeRecommendations=[];apiConnected=false;
       spotifyTopAlbums=Array.from({length:18},(_,index)=>({title:`Synthetic favorite ${index}`,artist:'Example Artist',uri:`spotify:album:${String(index+1).padStart(22,'0')}`}));

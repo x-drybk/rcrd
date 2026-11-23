@@ -670,8 +670,10 @@ function securityHeaders(headers = {}) {
 }
 function send(response, status, body, headers = {}) { response.writeHead(status, securityHeaders({ 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', ...headers })); response.end(JSON.stringify(body)); }
 function redirect(response, location, headers = {}) { response.writeHead(302, securityHeaders({ Location: location, ...headers })); response.end(); }
-function spotifyScopes(includeTop = false) { return ['user-read-currently-playing', 'user-read-playback-state', 'user-modify-playback-state', 'user-library-read', 'user-library-modify', 'user-read-recently-played', 'playlist-read-private', 'playlist-read-collaborative', 'playlist-modify-private', 'streaming', 'user-read-private', ...(includeTop ? ['user-top-read'] : [])].join(' '); }
+function spotifyScopes(includeTop = false) { return ['user-read-currently-playing', 'user-read-playback-state', 'user-modify-playback-state', 'user-library-read', 'user-library-modify', 'user-read-recently-played', 'playlist-read-private', 'playlist-read-collaborative', 'playlist-modify-private', 'playlist-modify-public', 'streaming', 'user-read-private', ...(includeTop ? ['user-top-read'] : [])].join(' '); }
 function spotifyHasScope(session, scope) { return typeof session?.spotify?.scope === 'string' && session.spotify.scope.split(/\s+/).includes(scope); }
+function spotifyPlaylistWriteScope(playlist) { return playlist?.public === true ? 'playlist-modify-public' : 'playlist-modify-private'; }
+function spotifyPlaylistPermissionNotice(playlist) { return { error: playlist?.public === true ? 'Allow RCRD to edit public Spotify playlists. Playback is already connected.' : 'Allow RCRD to edit private Spotify playlists. Playback is already connected.', needsSpotifyAuthorization: true }; }
 function spotifyTrackUri(uri) { return typeof uri === 'string' && uri.length <= 100 && /^spotify:track:[A-Za-z0-9]+$/.test(uri); }
 async function createPrivateSpotifyPlaylist(session, request, name, uris = [], description = '') {
   const profile = await spotifyProfile(session); const account = session.spotify;
@@ -1647,12 +1649,12 @@ async function handle(request, response) {
         const id = body.id; const uris = body.uris;
         if (typeof id !== 'string' || !/^[A-Za-z0-9]+$/.test(id) || !Array.isArray(uris) || uris.length < 1 || uris.length > 100 || uris.some(uri => !spotifyTrackUri(uri)) || new Set(uris).size !== uris.length) return send(response, 400, { error: 'Choose a valid playlist and 1–100 unique Spotify songs.' });
         const profile = await spotifyProfile(session); const account = session.spotify;
-        if (!spotifyHasScope(session, 'playlist-modify-private')) return send(response, 403, { error: 'Approve private playlist access with Spotify to edit this playlist.', needsSpotifyAuthorization: true });
         const sameAccount = () => sessionFor(request) === session && session.spotify === account && account.userId === profile.id;
         if (!sameAccount()) return send(response, 409, { error: 'Spotify account changed. Try again.' });
         const playlist = await spotifyApi(session, `/playlists/${enc(id)}`);
         if (!sameAccount()) return send(response, 409, { error: 'Spotify account changed. Try again.' });
         if (playlist?.owner?.id !== profile.id) return send(response, 403, { error: 'Only playlists owned by this Spotify account can be edited here.' });
+        if (!spotifyHasScope(session, spotifyPlaylistWriteScope(playlist))) return send(response, 403, spotifyPlaylistPermissionNotice(playlist));
         const existing = await spotifyPages(session, `/playlists/${enc(id)}/items`, 50, `checkpoint:playlist-add:${id}`);
         if (!sameAccount()) return send(response, 409, { error: 'Spotify account changed. Try again.' });
         clearSpotifyCheckpoint(session, `checkpoint:playlist-add:${id}`);
@@ -1663,6 +1665,55 @@ async function handle(request, response) {
         account.cache?.delete(`playlist:${id}`);account.cache?.delete('playlists');
         clearSpotifyDiskEntry(session, `playlist:${id}`);clearSpotifyDiskEntry(session, 'playlists');
         return send(response, 200, { ok: true, added: missing.length });
+      } catch (error) { return sendSpotifyError(response, error, 502, [400, 401, 403, 404, 409]); }
+    }
+    if (['GET', 'PATCH'].includes(request.method) && url.pathname === '/api/spotify/playlist/edit') {
+      const session = sessionFor(request); if (!session?.spotify?.refreshToken) return send(response, 401, { error: 'Connect Spotify first.' });
+      try {
+        const body = request.method === 'PATCH' ? await readJsonBody(request, 3000) : null;
+        const id = request.method === 'GET' ? url.searchParams.get('id') : body?.id;
+        if (typeof id !== 'string' || !/^[A-Za-z0-9]+$/.test(id)) return send(response, 400, { error: 'Choose a valid Spotify playlist.' });
+        const name = typeof body?.name === 'string' ? body.name.trim() : '';
+        if (body && (typeof body.name !== 'string' || !name || name.length > 100 || /[\u0000-\u001f\u007f]/.test(name))) return send(response, 400, { error: 'Enter a playlist name of 1–100 characters.' });
+        const profile = await spotifyProfile(session); const account = session.spotify;
+        const sameAccount = () => sessionFor(request) === session && session.spotify === account && account.userId === profile.id;
+        if (!sameAccount()) return send(response, 409, { error: 'Spotify account changed. Try again.' });
+        const playlist = await spotifyApi(session, `/playlists/${enc(id)}`);
+        if (!sameAccount()) return send(response, 409, { error: 'Spotify account changed. Try again.' });
+        if (playlist?.owner?.id !== profile.id) return send(response, 403, { error: 'Only playlists owned by this Spotify account can be edited here.' });
+        if (!spotifyHasScope(session, spotifyPlaylistWriteScope(playlist))) return send(response, 403, spotifyPlaylistPermissionNotice(playlist));
+        if (body) {
+          await spotifyApi(session, `/playlists/${enc(id)}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name }) });
+          if (!sameAccount()) return send(response, 409, { error: 'Spotify account changed while renaming the playlist.' });
+          account.cache?.delete('playlists'); clearSpotifyDiskEntry(session, 'playlists');
+          return send(response, 200, { ok: true, name });
+        }
+        const entries = await spotifyPages(session, `/playlists/${enc(id)}/items`, 50);
+        if (!sameAccount()) return send(response, 409, { error: 'Spotify account changed while loading the playlist.' });
+        return send(response, 200, { id, name: playlist.name, tracks: entries.map(entry => entry.item || entry.track).filter(item => item?.type === 'track').map(item => ({ uri: item.uri, name: item.name, artist: item.artists?.map(artist => artist.name).join(', ') || 'Unknown artist' })) });
+      } catch (error) { return sendSpotifyError(response, error, 502, [400, 401, 403, 404, 409]); }
+    }
+    if (request.method === 'DELETE' && url.pathname === '/api/spotify/playlist/items') {
+      const session = sessionFor(request); if (!session?.spotify?.refreshToken) return send(response, 401, { error: 'Connect Spotify first.' });
+      try {
+        const body = await readJsonBody(request, 3000); const id = body.id; const uri = body.uri;
+        if (typeof id !== 'string' || !/^[A-Za-z0-9]+$/.test(id) || !spotifyTrackUri(uri)) return send(response, 400, { error: 'Choose a valid playlist and song.' });
+        const profile = await spotifyProfile(session); const account = session.spotify;
+        const sameAccount = () => sessionFor(request) === session && session.spotify === account && account.userId === profile.id;
+        if (!sameAccount()) return send(response, 409, { error: 'Spotify account changed. Try again.' });
+        const playlist = await spotifyApi(session, `/playlists/${enc(id)}`);
+        if (!sameAccount()) return send(response, 409, { error: 'Spotify account changed. Try again.' });
+        if (playlist?.owner?.id !== profile.id) return send(response, 403, { error: 'Only playlists owned by this Spotify account can be edited here.' });
+        if (!spotifyHasScope(session, spotifyPlaylistWriteScope(playlist))) return send(response, 403, spotifyPlaylistPermissionNotice(playlist));
+        const entries = await spotifyPages(session, `/playlists/${enc(id)}/items`, 50);
+        if (!sameAccount()) return send(response, 409, { error: 'Spotify account changed. Try again.' });
+        const count = entries.filter(entry => (entry.item || entry.track)?.uri === uri).length;
+        if (!count) return send(response, 409, { error: 'That song is no longer in this playlist. Refresh and try again.' });
+        await spotifyApi(session, `/playlists/${enc(id)}/items`, { method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ items: [{ uri }], snapshot_id: playlist.snapshot_id }) });
+        if (!sameAccount()) return send(response, 409, { error: 'Spotify account changed while removing the song.' });
+        account.cache?.delete(`playlist:${id}`); account.cache?.delete('playlists');
+        clearSpotifyDiskEntry(session, `playlist:${id}`); clearSpotifyDiskEntry(session, 'playlists');
+        return send(response, 200, { ok: true, removed: count });
       } catch (error) { return sendSpotifyError(response, error, 502, [400, 401, 403, 404, 409]); }
     }
     if (['GET', 'POST'].includes(request.method) && url.pathname === '/api/spotify/playlist') {

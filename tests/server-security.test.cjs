@@ -1458,6 +1458,61 @@ test('a partly created playlist retries song addition without duplicates or cros
   assert.equal(JSON.parse(repeated.body).added, 0); assert.equal(addCalls, 2); assert.equal(createCalls, 1);
 }));
 
+test('playlist editor verifies owner and private scope before reading or changing songs', () => fixture(async ({ request, state, testSessions }) => {
+  const uri = 'spotify:track:1234567890123456789012';
+  const headers = { Cookie: `rcrd_session=${sessionId}`, 'X-RCRD-Request': '1', 'Content-Type': 'application/json' };
+  const spotify = testSessions.get(sessionId).spotify;
+  spotify.scope = 'playlist-modify-private';
+  const changes = [];
+  let songs = [uri, uri];
+  state.providerFetch = async (url, options) => {
+    const pathname = new URL(url).pathname;
+    if (pathname.endsWith('/api/token')) return providerJson({ access_token: 'synthetic-access', expires_in: 3600 });
+    if (pathname === '/v1/me') return providerJson({ id: 'synthetic-user' });
+    if (pathname === '/v1/playlists/foreign123') return providerJson({ id: 'foreign123', owner: { id: 'other-user' }, public: false, snapshot_id: 'one' });
+    if (pathname === '/v1/playlists/unspecified123') return providerJson({ id: 'unspecified123', name: 'Private playlist', owner: { id: 'synthetic-user' }, public: null, snapshot_id: 'one' });
+    if (pathname === '/v1/playlists/unspecified123/items') return providerJson({ items: [], total: 0, next: null });
+    if (pathname === '/v1/playlists/public123' && options.method === 'PUT') { changes.push({ path: pathname, method: 'PUT', body: JSON.parse(options.body) }); return providerJson({}); }
+    if (pathname === '/v1/playlists/public123') return providerJson({ id: 'public123', owner: { id: 'synthetic-user' }, public: true, snapshot_id: 'one' });
+    if (pathname === '/v1/playlists/public123/items') return providerJson({ items: [], total: 0, next: null });
+    if (pathname === '/v1/playlists/private123' && options.method === 'PUT') { changes.push({ path: pathname, method: 'PUT', body: JSON.parse(options.body) }); return providerJson({}); }
+    if (pathname === '/v1/playlists/private123') return providerJson({ id: 'private123', name: 'Old name', owner: { id: 'synthetic-user' }, public: false, snapshot_id: 'one' });
+    if (pathname === '/v1/playlists/private123/items' && options.method === 'DELETE') { changes.push({ path: pathname, method: 'DELETE', body: JSON.parse(options.body) }); songs = []; return providerJson({ snapshot_id: 'two' }); }
+    if (pathname === '/v1/playlists/private123/items') return providerJson({ items: songs.map(value => ({ item: { uri: value, type: 'track', name: 'Example song', artists: [{ name: 'Example artist' }] } })), total: songs.length, next: null });
+    throw new Error(`Unexpected provider request: ${pathname}`);
+  };
+  const edit = (method, id, body = {}) => request(method === 'GET' ? `/api/spotify/playlist/edit?id=${id}` : '/api/spotify/playlist/edit', { method, headers, ...(method === 'GET' ? {} : { body: JSON.stringify({ id, ...body }) }) });
+  assert.equal((await edit('GET', 'foreign123')).status, 403);
+  const publicDenied = await edit('PATCH', 'public123', { name: 'Changed' });
+  assert.equal(publicDenied.status, 403);
+  assert.match(JSON.parse(publicDenied.body).error, /Playback is already connected/);
+  assert.equal(JSON.parse(publicDenied.body).needsSpotifyAuthorization, true);
+  assert.equal((await edit('GET', 'unspecified123')).status, 200, 'a nullable visibility flag does not hide an owned playlist');
+  assert.equal((await edit('PATCH', 'private123', { name: '' })).status, 400);
+  assert.equal((await edit('PATCH', 'private123', { name: 12 })).status, 400);
+  const loaded = await edit('GET', 'private123');
+  assert.equal(loaded.status, 200, loaded.body);
+  assert.equal(JSON.parse(loaded.body).tracks.length, 2);
+  assert.equal((await edit('PATCH', 'private123', { name: 'New name' })).status, 200);
+  const remove = body => { const payload = JSON.stringify(body); return request('/api/spotify/playlist/items', { method: 'DELETE', headers: { ...headers, 'Content-Length': Buffer.byteLength(payload) }, body: payload }); };
+  const foreignRemove = await remove({ id: 'foreign123', uri });
+  assert.equal(foreignRemove.status, 403, foreignRemove.body);
+  assert.equal((await remove({ id: 'private123', uri: 'bad' })).status, 400);
+  const removed = await remove({ id: 'private123', uri });
+  assert.equal(removed.status, 200, removed.body);
+  assert.equal(JSON.parse(removed.body).removed, 2);
+  assert.equal((await remove({ id: 'private123', uri })).status, 409);
+  assert.deepEqual(changes.map(change => change.method), ['PUT', 'DELETE']);
+  assert.deepEqual(changes[1].body, { items: [{ uri }], snapshot_id: 'one' });
+  spotify.scope = 'playlist-modify-private playlist-modify-public';
+  assert.equal((await edit('GET', 'public123')).status, 200);
+  assert.equal((await edit('PATCH', 'public123', { name: 'Changed' })).status, 200);
+  assert.deepEqual(changes[2], { path: '/v1/playlists/public123', method: 'PUT', body: { name: 'Changed' } });
+  spotify.scope = '';
+  assert.equal((await edit('GET', 'private123')).status, 403);
+  assert.equal((await remove({ id: 'private123', uri })).status, 403);
+}));
+
 const mixSeedId = '1'.padStart(22, '0');
 const mixSeed = { uri: `spotify:track:${mixSeedId}`, name: 'Synthetic seed', type: 'track', artists: [{ id: '2'.padStart(22, '0'), name: 'Synthetic artist' }] };
 function installMixProvider(state, override = () => undefined) {

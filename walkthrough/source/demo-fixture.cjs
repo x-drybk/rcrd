@@ -57,7 +57,9 @@ function createFixture(root, { connected = true, fontManifest: suppliedFontManif
   const fontManifest = suppliedFontManifest ?? JSON.parse(fs.readFileSync(path.join(fontDirectory, 'manifest.json'), 'utf8'));
   let current = tracks[0], paused = true, position = 42000, changedAt = Date.now(), shuffle = false, repeat = 'off';
   let device = 'rcrd_demo_player';
+  let accountId = 'example-listener';
   const liked = new Set([tracks[0].uri, tracks[3].uri]);
+  const playlists = new Map([[id(800), { name: 'Morning records', tracks: tracks.slice(0, 20) }], [id(801), { name: 'Road trip', tracks: tracks.slice(20, 36) }]]);
   const collections = Array.from({ length: 14 }, (_, i) => discogsRelease(i));
   const wants = Array.from({ length: 8 }, (_, i) => discogsRelease(i + 4));
   const requests = [], blocked = [], unexpected = [];
@@ -81,16 +83,29 @@ function createFixture(root, { connected = true, fontManifest: suppliedFontManif
       requests.push({ path: p, method: request.method() });
       const body = request.postData() && request.headers()['content-type'] !== 'application/zip' ? JSON.parse(request.postData()) : {};
       if (p === '/api/health') return json({ ok: true, app: 'rcrd', version: JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8')).version, pid: 1 });
-      if (p === '/api/spotify/status') return json({ connected, canModifyLibrary: true, canReadTop: true, daysRemaining: 170 });
+      if (p === '/api/spotify/status') return json({ connected, accountMarker: connected ? accountId : null, canModifyLibrary: true, canModifyPrivatePlaylists: true, canReadTop: true, daysRemaining: 170 });
       if (p === '/api/session') return json({ connected });
-      if (p === '/api/spotify/me') return json({ id: 'example-listener', display_name: 'Example listener', followers: { total: 12 }, images: [] });
+      if (p === '/api/spotify/me') return json({ id: accountId, display_name: accountId === 'example-listener' ? 'Example listener' : 'Second listener', followers: { total: 12 }, images: [] });
       if (p === '/api/spotify/token') return json({ access_token: 'synthetic-demo-no-access' });
       if (p === '/api/spotify/recent') return json({ recentlyPlayed: albumList.map(a => tracks.find(t => t.album.id === a.id)) });
       if (p === '/api/spotify/top-albums') return json({ tracks: [...albumList].reverse().map(a => tracks.find(t => t.album.id === a.id)) });
       if (p === '/api/spotify/library') return json({ savedAlbums: albumList.map(album => ({ album, added_at: '2026-10-22T12:00:00Z' })), saved: tracks.slice(0, 36).map(track => ({ track, added_at: '2026-10-22T12:00:00Z' })), sync: sync() });
       if (p === '/api/spotify/library-progress') return json({ active: false });
-      if (p === '/api/spotify/playlists') return json({ playlists: [{ id: id(800), name: 'Morning records', tracksTotal: 20 }, { id: id(801), name: 'Road trip', tracksTotal: 16 }] });
-      if (p === '/api/spotify/playlist') return json({ tracks: tracks.slice(0, 20), total: 20, sync: sync() });
+      if (p === '/api/spotify/playlists') return json({ playlists: [...playlists].map(([playlistId, list]) => ({ id: playlistId, name: list.name, tracksTotal: list.tracks.length })) });
+      if (p === '/api/spotify/playlist') { const list = playlists.get(url.searchParams.get('id')) || playlists.get(id(800)); return json({ tracks: url.searchParams.has('preview') ? list.tracks.slice(0, 50) : list.tracks, total: list.tracks.length, sync: sync() }); }
+      if (p === '/api/spotify/playlist/edit') {
+        const playlistId = request.method() === 'GET' ? url.searchParams.get('id') : body.id;
+        const list = playlists.get(playlistId);
+        if (!list) return json({ error: 'Playlist unavailable' }, 404);
+        if (request.method() === 'PATCH') { list.name = body.name; return json({ ok: true, name: list.name }); }
+        return json({ id: playlistId, name: list.name, tracks: list.tracks.map(track => ({ uri: track.uri, name: track.name, artist: track.artists[0].name })) });
+      }
+      if (p === '/api/spotify/playlist/items') {
+        const list = playlists.get(body.id);
+        if (!list) return json({ error: 'Playlist unavailable' }, 404);
+        if (request.method() === 'POST') { const missing = body.uris.filter(uri => !list.tracks.some(track => track.uri === uri)); list.tracks.push(...missing.map(uri => tracks.find(track => track.uri === uri)).filter(Boolean)); return json({ ok: true, added: missing.length }); }
+        if (request.method() === 'DELETE') { const before = list.tracks.length; list.tracks = list.tracks.filter(track => track.uri !== body.uri); return json({ ok: true, removed: before - list.tracks.length }); }
+      }
       if (p === '/api/spotify/search') {
         const q = (url.searchParams.get('q') || '').toLowerCase().replace(/album:|artist:/g, '');
         const albums = albumList.filter(a => q.includes(a.name.toLowerCase()) || q.includes(a.artists[0].name.toLowerCase()) || `${a.name} ${a.artists[0].name}`.toLowerCase().includes(q));
@@ -145,6 +160,6 @@ function createFixture(root, { connected = true, fontManifest: suppliedFontManif
     if (!permitted || !target.startsWith(root + path.sep) || !fs.existsSync(target) || !fs.statSync(target).isFile()) { blocked.push(p); return handler.abort(); }
     return handler.fulfill({ body: fs.readFileSync(target), contentType: ({ '.html': 'text/html', '.js': 'application/javascript', '.css': 'text/css', '.svg': 'image/svg+xml', '.woff2': 'font/woff2', '.webmanifest': 'application/manifest+json' })[path.extname(target)] || 'application/octet-stream' });
   }
-  return { route, initial: playback(), sdkInstaller, requests, blocked, unexpected, setConnected(value) { connected = value; }, assertClean() { assert.deepEqual(unexpected, [], 'Every demonstration API request must have a fixture'); } };
+  return { route, initial: playback(), sdkInstaller, requests, blocked, unexpected, setConnected(value) { connected = value; }, setAccount(value) { accountId = value; }, assertClean() { assert.deepEqual(unexpected, [], 'Every demonstration API request must have a fixture'); } };
 }
 module.exports = { createFixture, ORIGIN, albumList, tracks };

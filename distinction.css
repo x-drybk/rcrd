@@ -562,6 +562,22 @@ main{width:100%;margin-left:0}
 #spotifyCreatePlaylistSubmit{justify-self:end}#spotifyCreatePlaylistSubmit:disabled{opacity:.5;cursor:default}
 #spotifyCreatePlaylistName:focus-visible,#spotifyCreatePlaylistSearch:focus-visible{border-color:var(--lime);outline:2px solid var(--lime);outline-offset:2px}
 .spotify-create-playlist:focus-visible,.playlist-permission button:focus-visible,.playlist-song-row button:focus-visible{outline:2px solid var(--lime);outline-offset:2px}
+.spotify-playlist-heading-actions{display:flex;align-items:center;gap:8px}
+.spotify-playlist-heading-actions [hidden]{display:none}
+#spotifyEditPlaylistDialog{width:min(580px,calc(100vw - 32px));max-height:min(780px,calc(100vh - 32px));padding:24px;background:#19211c;color:var(--ink);border:1px solid var(--line)}
+#spotifyEditPlaylistDialog::backdrop{background:#0009}
+#spotifyEditPlaylistDialog>h2{margin:0 0 8px}
+#spotifyEditPlaylistDialog>label,#spotifyEditPlaylistNameForm label{display:block;margin:12px 0 6px;color:var(--muted);font-size:11px}
+#spotifyEditPlaylistStatus{font-size:11px;color:var(--muted);line-height:1.5}
+#spotifyEditPlaylistDialog.needs-permission #spotifyEditPlaylistStatus,#spotifyEditPlaylistDialog.needs-permission #spotifyEditPlaylistNameForm,#spotifyEditPlaylistDialog.needs-permission>label,#spotifyEditPlaylistDialog.needs-permission #spotifyEditPlaylistSearch,#spotifyEditPlaylistDialog.needs-permission #spotifyEditPlaylistResults,#spotifyEditPlaylistDialog.needs-permission .playlist-song-heading,#spotifyEditPlaylistDialog.needs-permission #spotifyEditPlaylistSongs,#spotifyEditPlaylistDialog.needs-permission .playlist-edit-pages{display:none}
+#spotifyEditPlaylistName,#spotifyEditPlaylistSearch{width:100%;height:40px;padding:0 11px;border:1px solid var(--line);border-radius:4px;background:#202923;color:var(--ink)}
+.playlist-edit-name-row{display:flex;gap:8px}.playlist-edit-name-row input{flex:1;min-width:0}
+.playlist-edit-name-row button,.playlist-edit-pages button{padding:0 12px;min-height:36px;border:1px solid var(--line);border-radius:4px;background:#223d2c;color:var(--ink);font-size:11px}
+#spotifyEditPlaylistDialog .playlist-song-selected{max-height:250px}
+.playlist-edit-pages{display:flex;justify-content:center;align-items:center;gap:12px;margin-top:10px;font-size:11px;color:var(--muted)}
+.playlist-edit-pages button:disabled{opacity:.5;cursor:default}
+.playlist-edit-name-row button:hover:not(:disabled),.playlist-edit-pages button:hover:not(:disabled){border-color:var(--lime);color:var(--lime)}
+.playlist-edit-name-row button:focus-visible,.playlist-edit-pages button:focus-visible{outline:2px solid var(--lime);outline-offset:2px}
 .playlist-song-row button{border-radius:4px}
 @media(max-width:480px){#spotifyCreatePlaylistSubmit{justify-self:stretch}}
 #lyricsDialog{width:min(680px,94vw);max-height:86vh;overflow:auto;padding:24px;background:#19211c;color:var(--ink);border:1px solid var(--line)}

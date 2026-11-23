@@ -21,3 +21,7 @@ Optional recorded play counts can start with the account holder's Extended Strea
 Optional lyrics require a [Genius API client](https://genius.com/api-clients). Put its Client Access Token in `GENIUS_ACCESS_TOKEN` in your private `.env`, restart RCRD, and choose **Lyrics** in the track bar. RCRD sends the current title and artist to Genius only when requested, then displays a Genius-hosted view when available; Genius may receive your IP address. Lyrics are not stored by RCRD. If the hosted view cannot load, use **Read on Genius**. RCRD is independent and not affiliated with Genius. Keep the token out of source packages.
 
 The packaging script selects named source files and excludes known runtime-data paths. This default setup note omits contributor names; review the archive, contributor credit, and licensing before broader redistribution.
+
+## Contributor checks
+
+Run `npm ci`, `npx playwright install chromium`, `npm test`, `npm run test:launcher`, `npm run test:history-parser`, `npm run test:share`, and `npm run test:browser` before preparing a release. The browser suite uses synthetic Spotify and Discogs responses in an isolated browser; it does not connect to an account or start the local RCRD server. On Windows, an installed Chrome can be used instead of downloading Chromium by setting `RCRD_CHROME_PATH` to its executable path. GitHub Actions runs these checks on pushes and pull requests.
