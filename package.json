@@ -6,6 +6,7 @@
   "scripts": {
     "start": "node server.js",
     "test": "node tests/run.cjs",
+    "test:crlf": "node tests/run-crlf.cjs",
     "test:browser": "node tests/run-browser.cjs",
     "test:layout": "node tests/spotify-list-layout.browser.cjs",
     "test:launcher": "powershell -NoProfile -ExecutionPolicy Bypass -File tests/launcher.test.ps1",

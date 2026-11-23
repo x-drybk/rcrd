@@ -4,11 +4,11 @@ const fs = require('node:fs');
 const vm = require('node:vm');
 const path = require('node:path');
 
-const source = fs.readFileSync(path.join(__dirname, '..', 'app.js'), 'utf8');
+const source = fs.readFileSync(path.join(__dirname, '..', 'app.js'), 'utf8').replace(/\r\n/g, '\n');
 const markup = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
 const styles = ['styles.css', 'distinction.css'].map(file => fs.readFileSync(path.join(__dirname, '..', file), 'utf8')).join('\n');
 const definition = name => {
-  const lines = source.split('\n');
+  const lines = source.split(/\r?\n/);
   const start = lines.findIndex(value => value.startsWith(`function ${name}(`) || value.startsWith(`async function ${name}(`));
   assert.ok(start >= 0, `${name} exists`);
   if (lines[start].trimEnd().endsWith('}')) return lines[start];

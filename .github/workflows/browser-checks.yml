@@ -20,6 +20,7 @@ jobs:
       - run: npm ci
       - run: npx playwright install chromium
       - run: npm test
+      - run: npm run test:crlf
       - run: npm run test:launcher
       - run: npm run test:history-parser
       - run: npm run test:share

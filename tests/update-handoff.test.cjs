@@ -5,7 +5,7 @@ const path = require('node:path');
 const vm = require('node:vm');
 const { EventEmitter } = require('node:events');
 
-const source = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
+const source = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8').replace(/\r\n/g, '\n');
 const start = source.indexOf('async function requestServerUpdate()');
 assert.ok(start >= 0);
 const update = source.slice(start, source.indexOf('\n}', start) + 2);

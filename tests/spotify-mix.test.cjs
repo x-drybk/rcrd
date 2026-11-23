@@ -1,8 +1,8 @@
 const {test}=require('node:test');
 const assert=require('node:assert/strict');
 const fs=require('node:fs');const path=require('node:path');const vm=require('node:vm');
-const source=fs.readFileSync(path.join(__dirname,'..','app.js'),'utf8');
-function definition(name){const lines=source.split('\n');const start=lines.findIndex(line=>line.startsWith(`function ${name}(`)||line.startsWith(`async function ${name}(`));assert.ok(start>=0);if(lines[start].trimEnd().endsWith('}'))return lines[start];const end=lines.findIndex((line,index)=>index>start&&line==='}');assert.ok(end>start);return lines.slice(start,end+1).join('\n');}
+const source=fs.readFileSync(path.join(__dirname,'..','app.js'),'utf8').replace(/\r\n/g,'\n');
+function definition(name){const lines=source.split(/\r?\n/);const start=lines.findIndex(line=>line.startsWith(`function ${name}(`)||line.startsWith(`async function ${name}(`));assert.ok(start>=0);if(lines[start].trimEnd().endsWith('}'))return lines[start];const end=lines.findIndex((line,index)=>index>start&&line==='}');assert.ok(end>start);return lines.slice(start,end+1).join('\n');}
 const id=n=>String(n).padStart(22,'0');const lead={id:id(1),name:'Example Artist'};
 function track(n,extra={}){return {type:'track',uri:`spotify:track:${id(n)}`,name:`Song ${n}`,artists:[lead],album:{id:id(10000+n),name:`Album ${n}`},...extra};}
 const seed=track(1000);

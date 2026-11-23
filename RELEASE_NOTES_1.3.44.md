@@ -8,6 +8,6 @@
 
 ## Release checks
 
-Run `npm ci`, `npx playwright install chromium`, `npm test`, `npm run test:launcher`, `npm run test:history-parser`, `npm run test:share`, and `npm run test:browser`. GitHub Actions runs these suites on push and pull request. The release ZIP should be built with `scripts/Build-RCRD-Share.ps1` and its version and SHA-256 digest verified before publishing. Do not include `.env` or `.data`.
+Run `npm ci`, `npx playwright install chromium`, `npm test`, `npm run test:crlf`, `npm run test:launcher`, `npm run test:history-parser`, `npm run test:share`, and `npm run test:browser`. GitHub Actions runs these suites on push and pull request. The release ZIP should be built with `scripts/Build-RCRD-Share.ps1` and its version and SHA-256 digest verified before publishing. Do not include `.env` or `.data`.
 
 The automatic update itself still needs a manual check from a launcher-managed 1.3.43 install after publishing a verified `RCRD-1.3.44.zip` release. The synthetic browser check exercises the available, current, and failed-install UI states; it does not replace the running application files.
