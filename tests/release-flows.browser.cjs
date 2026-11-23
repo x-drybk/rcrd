@@ -1,8 +1,12 @@
 // Synthetic release regression. The fixture never opens a real account or local server.
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
 const path = require('node:path');
 const { chromium } = require('playwright');
 const { createFixture, ORIGIN } = require('../walkthrough/source/demo-fixture.cjs');
+
+const currentVersion = JSON.parse(fs.readFileSync(path.resolve(__dirname, '..', 'package.json'), 'utf8')).version;
+const updateVersion = currentVersion.replace(/(\d+)$/, (_, patch) => String(Number(patch) + 1));
 
 (async () => {
   const fixture = createFixture(path.resolve(__dirname, '..'), { fontManifest: {} });
@@ -16,7 +20,7 @@ const { createFixture, ORIGIN } = require('../walkthrough/source/demo-fixture.cj
       const request = route.request();
       const url = new URL(request.url());
       if (/^fonts\.(googleapis|gstatic)\.com$/.test(url.hostname)) return route.fulfill({ contentType: 'text/css', body: '' });
-      if (url.pathname === '/api/update-check') return route.fulfill({ contentType: 'application/json', body: JSON.stringify({ currentVersion: '1.3.43', latestVersion: '1.3.44', updateAvailable, installAvailable: updateAvailable, releaseUrl: 'https://github.com/x-drybk/rcrd/releases/tag/v1.3.44' }) });
+      if (url.pathname === '/api/update-check') return route.fulfill({ contentType: 'application/json', body: JSON.stringify({ currentVersion, latestVersion: updateVersion, updateAvailable, installAvailable: updateAvailable, releaseUrl: `https://github.com/x-drybk/rcrd/releases/tag/v${updateVersion}` }) });
       if (url.pathname === '/api/update-install') { installAttempts++; return route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ error: 'Synthetic update helper unavailable.' }) }); }
       if (url.pathname === '/api/spotify/playlist/edit' && editPermissionDenied) return route.fulfill({ status: 403, contentType: 'application/json', body: JSON.stringify({ error: 'Allow RCRD to edit public Spotify playlists. Playback is already connected.', needsSpotifyAuthorization: true }) });
       if (url.pathname === '/api/spotify/playback' && request.method() === 'POST') playbackActions.push(request.postDataJSON().action);
@@ -39,9 +43,9 @@ const { createFixture, ORIGIN } = require('../walkthrough/source/demo-fixture.cj
     await page.locator('.profile-menu:not(.mobile-profile-menu) [data-profile-action="about"]').click();
     assert.equal(await page.locator('#aboutDialog').evaluate(dialog => dialog.open), true);
     await page.locator('#aboutDialog [data-check-updates]').click();
-    await page.locator('#updateDialogTitle').getByText('RCRD 1.3.44 is available').waitFor();
+    await page.locator('#updateDialogTitle').getByText(`RCRD ${updateVersion} is available`).waitFor();
     assert.equal(await page.locator('#updateInstallButton').isVisible(), true, 'verified release offers installation');
-    assert.equal(await page.locator('#updateReleaseLink').getAttribute('href'), 'https://github.com/x-drybk/rcrd/releases/tag/v1.3.44');
+    assert.equal(await page.locator('#updateReleaseLink').getAttribute('href'), `https://github.com/x-drybk/rcrd/releases/tag/v${updateVersion}`);
     await page.locator('#updateInstallButton').click();
     await page.locator('#updateDialogTitle').getByText('Update could not finish').waitFor();
     assert.equal(installAttempts, 1, 'install action reaches the local update endpoint');
