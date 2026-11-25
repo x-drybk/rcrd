@@ -1436,6 +1436,18 @@ async function handle(request, response) {
       const session = sessionFor(request); if (!session?.spotify?.refreshToken) return send(response, 401, { error: 'Connect Spotify first.' });
       try { return send(response, 200, await spotifyApi(session, '/me/player')); } catch (error) { return sendSpotifyError(response, error, 502, [401]); }
     }
+    if (request.method === 'GET' && url.pathname === '/api/spotify/queue') {
+      const session = sessionFor(request); if (!session?.spotify?.refreshToken) return send(response, 401, { error: 'Connect Spotify first.' });
+      const account = session.spotify;
+      try {
+        const data = await spotifyApi(session, '/me/player/queue');
+        if (sessionFor(request) !== session || session.spotify !== account) return send(response, 409, { error: 'Spotify account changed. Try again.' });
+        if (data === null) return send(response, 200, { current: null, upcoming: [] });
+        if (!data || !Array.isArray(data.queue)) return send(response, 502, { error: 'Spotify returned an invalid playing queue.' });
+        const item = value => value && ['track', 'episode'].includes(value.type) && new RegExp(`^spotify:${value.type}:[A-Za-z0-9]{22}$`).test(value.uri || '') ? { uri: value.uri, title: String(value.name || 'Untitled').slice(0, 300), artist: value.type === 'track' ? (Array.isArray(value.artists) ? value.artists.map(artist => String(artist?.name || '')).filter(Boolean).join(', ').slice(0, 300) : '') : String(value.show?.name || '').slice(0, 300), album: String(value.album?.name || '').slice(0, 300) } : null;
+        return send(response, 200, { current: item(data.currently_playing), upcoming: data.queue.slice(0, 100).map(item).filter(Boolean) });
+      } catch (error) { return sendSpotifyError(response, error, 502, [401, 403, 409]); }
+    }
     if (request.method === 'GET' && url.pathname === '/api/spotify/devices') {
       const session = sessionFor(request); if (!session?.spotify?.refreshToken) return send(response, 401, { error: 'Connect Spotify first.' });
       try {

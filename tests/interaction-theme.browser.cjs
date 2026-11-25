@@ -34,7 +34,8 @@ const lime = 'rgb(217, 255, 72)';
       document.querySelector('#sidebarPlaylistList').hidden = false;
       document.querySelector('#spotifySearchScopeList').hidden = false;
       document.querySelector('#settingsSpotifyReconnect').hidden = false;
-      document.querySelector('#wantlistGrid').insertAdjacentHTML('beforeend', '<article class="want-card"><button id="themeWantAction" class="find-listing">Find editions</button></article>');
+      document.querySelector('#wantlistGrid').insertAdjacentHTML('beforeend', '<article class="want-card"><div class="want-card-actions"><button id="themeWantAction" class="find-listing">Find editions</button><a id="themeShopAction" class="wantlist-shop" href="https://www.discogs.com/release/1">Shop on Discogs</a></div></article>');
+      document.querySelector('#collectionGrid').insertAdjacentHTML('beforeend', '<article class="collection-card"><div class="collection-card-actions"><button id="themeSpotifyAction" class="collection-spotify">Find in Spotify</button><button id="themeCopyNotesAction" class="collection-notes-button">Add copy notes</button></div></article>');
       document.querySelector('#marketGrid').insertAdjacentHTML('beforeend', '<article class="market-card"><button id="themeCatalogAction" class="api-collection">Add to collection</button></article>');
       document.querySelector('#collectionPagination').innerHTML = '<button class="active">1</button><button id="themeNextPage">2</button>';
     });
@@ -62,6 +63,9 @@ const lime = 'rgb(217, 255, 72)';
       ['collection pagination', '#themeNextPage'],
       ['wantlist refresh', '#wantlistRefresh'],
       ['wantlist action', '#themeWantAction'],
+      ['wantlist shop action', '#themeShopAction'],
+      ['collection Spotify action', '#themeSpotifyAction'],
+      ['collection copy notes action', '#themeCopyNotesAction'],
       ['catalog sort direction', '#discogsSearchSortDirection'],
       ['catalog action', '#themeCatalogAction'],
       ['Settings primary action', '#restartRcrd'],
@@ -83,6 +87,15 @@ const lime = 'rgb(217, 255, 72)';
       assert.equal(style.color, lime, `${label} has the shared hover text`);
       assert.equal(style.radius, '4px', `${label} has the shared corner shape`);
     }
+    await page.mouse.move(0, 0);
+    const discogsTextColors = await page.evaluate(() => ['#themeWantAction', '#themeShopAction', '#themeSpotifyAction', '#themeCopyNotesAction'].map(selector => getComputedStyle(document.querySelector(selector)).color));
+    assert.deepEqual(discogsTextColors, ['rgb(20, 32, 25)', 'rgb(238, 242, 237)', 'rgb(238, 242, 237)', 'rgb(238, 242, 237)'], 'Discogs card labels follow the primary and secondary button text colors');
+    const discogsActions = await page.evaluate(() => ['#themeWantAction', '#themeShopAction', '#themeSpotifyAction', '#themeCopyNotesAction'].map(selector => {
+      const node = document.querySelector(selector);
+      const css = getComputedStyle(node);
+      return { height: node.getBoundingClientRect().height, decoration: css.textDecorationLine };
+    }));
+    assert.ok(discogsActions.every(action => action.height === 29 && action.decoration === 'none'), `Discogs card actions share a compact size and do not look like inline links: ${JSON.stringify(discogsActions)}`);
 
     for (const [label, selector] of [
       ['guide navigation', '.guide-toc a[href="#guide-listening"]'],
@@ -183,6 +196,15 @@ const lime = 'rgb(217, 255, 72)';
     assert.equal(await lyricsCredit.evaluate(node => getComputedStyle(node).color), lime, 'Genius credit highlights for keyboard focus');
     await page.locator('#lyricsDialog').evaluate(dialog => dialog.close());
     await page.setViewportSize({ width: 600, height: 900 });
+    const narrowActions = await page.evaluate(() => {
+      const row = document.querySelector('.want-card-actions').getBoundingClientRect();
+      const buttons = ['#themeWantAction', '#themeShopAction'].map(selector => document.querySelector(selector).getBoundingClientRect());
+      const collectionRow = document.querySelector('.collection-card-actions').getBoundingClientRect();
+      const collectionButtons = ['#themeSpotifyAction', '#themeCopyNotesAction'].map(selector => document.querySelector(selector).getBoundingClientRect());
+      return { rowRight: row.right, buttonRights: buttons.map(button => button.right), collectionRight: collectionRow.right, collectionButtonRights: collectionButtons.map(button => button.right) };
+    });
+    assert.ok(narrowActions.buttonRights.every(right => right <= narrowActions.rowRight + 1), 'wantlist actions wrap inside their card at narrow widths');
+    assert.ok(narrowActions.collectionButtonRights.every(right => right <= narrowActions.collectionRight + 1), 'collection actions wrap inside their card at narrow widths');
     const narrowGuide = await page.locator('#guide-optional-features').evaluate(node => ({ columns: getComputedStyle(node).columnCount, client: node.clientWidth, scroll: node.scrollWidth }));
     assert.equal(narrowGuide.columns, '1', 'optional guidance stacks into one column on narrow screens');
     assert.ok(narrowGuide.scroll <= narrowGuide.client + 1, 'optional guidance does not overflow horizontally');

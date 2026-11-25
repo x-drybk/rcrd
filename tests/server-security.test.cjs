@@ -215,6 +215,22 @@ test('delayed Spotify playback response cannot reach a switched account', () => 
   assert.doesNotMatch(response.body, /private track|old-access/);
 }));
 
+test('playing queue is authenticated, bounded, and omits provider-only fields', () => fixture(async ({ request, state }) => {
+  assert.equal((await request('/api/spotify/queue')).status, 401);
+  const id='Q'.repeat(22);
+  state.providerFetch=async url=>{
+    const pathname=new URL(url).pathname;
+    if(pathname.endsWith('/api/token'))return providerJson({access_token:'synthetic-access',expires_in:3600});
+    assert.equal(pathname,'/v1/me/player/queue');
+    const song={type:'track',uri:`spotify:track:${id}`,name:'Safe song',artists:[{name:'Artist'}],album:{name:'Album'},privateField:'secret'};
+    return providerJson({currently_playing:song,queue:[...Array(105).fill(song),{type:'track',uri:'bad',name:'Invalid'}]});
+  };
+  const response=await request('/api/spotify/queue',{headers:{Cookie:`rcrd_session=${sessionId}`}});
+  assert.equal(response.status,200);const data=JSON.parse(response.body);
+  assert.equal(data.current.title,'Safe song');assert.equal(data.upcoming.length,100);
+  assert.equal(data.upcoming[0].artist,'Artist');assert.doesNotMatch(response.body,/privateField|secret/);
+}));
+
 test('queued Spotify request is not sent under the previous account after a switch', () => fixture(async ({ request, state, testSessions }) => {
   let entered; let release;
   const waiting = new Promise(resolve => { entered = resolve; });

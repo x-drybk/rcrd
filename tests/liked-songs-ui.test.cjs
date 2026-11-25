@@ -46,7 +46,7 @@ function harness(fetch) {
     closeLyricsDialog() {}
   });
   vm.runInContext(`let spotifyConnected=true,spotifyCanModifyLibrary=true,spotifyAccountGeneration=0,
-    spotifyTrackUri=null,likedStatus=null,likedRequestRevision=0,likedCheckPending=false,likedMutationPending=false,
+    spotifyTrackUri=null,activeSpotifyMix=null,likedStatus=null,likedRequestRevision=0,likedCheckPending=false,likedMutationPending=false,
     spotifyLibraryLoaded=true,spotifyLibraryPromise=null,spotifyLibraryRevision=0,spotifyLibraryNeedsRefresh=false,
     spotifyPlaybackStateRevision=0,spotifySkipPending=0,spotifyTogglePending=false,spotifyPlaybackStartPending=0,spotifyPlaybackSyncGeneration=null,spotifyPlaybackSyncAgain=false,
     shuffleRequestPending=false,shuffleRevision=0,repeatRequestPending=false,repeatRevision=0;`, context);

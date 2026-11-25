@@ -51,7 +51,7 @@ let playing=false;
 let spotifyPlayer=null;let spotifyPlayerConnectFailed=false;let spotifyDeviceId=null;let spotifyTargetDeviceId=null;let spotifyPlayerTransfer=null;let spotifyTargetSupportsVolume=true;let spotifyDeviceRequestRevision=0;let spotifyDeviceRefreshTimer=null;let spotifyDeviceRefreshBusy=0;let spotifyDeviceRefreshEnabled=false;let spotifySyncTimer=null;let spotifyProgressTimer=null;let spotifyPlayerReadyTimer=null;let spotifyTrackUri=null;let spotifyDurationMs=0;let spotifyPositionMs=0;let spotifyProgressUpdatedAt=0;let spotifyPlaybackStateRevision=0;let spotifySdkStateRevision=0;let spotifySkipQueue=Promise.resolve();let spotifySkipPending=0;let spotifySkipBusy={next:0,previous:0};let spotifyToggleQueue=Promise.resolve();let spotifyTogglePending=0;let spotifyModeQueue=Promise.resolve();let spotifyPlaybackStartPending=0;let volume=uiPreferences.volume/100;let volumeBeforeMute=uiPreferences.volumeBeforeMute/100;let shuffleEnabled=false;let repeatMode='off';let spotifyHasContext=false;let shuffleRequestPending=false;let shuffleRevision=0;let repeatRequestPending=false;let repeatRevision=0;
 let spotifyHealthConnection=null;let spotifyCanStream=null;let spotifyPlayerState='waiting';let spotifyPlayerIssue='';let spotifyActiveDevice='Not checked';let availableSpotifyDevices=new Map();let spotifyPlayerAuthRecoveryAttempted=false;
 let spotifyCanModifyLibrary=false;let spotifyCanModifyPrivatePlaylists=null;let likedStatus=null;let likedRequestRevision=0;let likedCheckPending=false;let likedMutationPending=false;
-let spotifyMixRevision=0;let spotifyMixController=null;let spotifyMixPreview=null;
+let spotifyMixRevision=0;let spotifyMixController=null;let spotifyMixPreview=null;let activeSpotifyMix=null;let playingQueueRevision=0;
 function escapeHtml(value){return String(value??'').replace(/[&<>"']/g,character=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[character]))}
 function safeImageUrl(value){try{const parsed=new URL(value);return parsed.protocol==='https:'?parsed.href:''}catch{return ''}}
 function discogsWebUrl(result){const value=String(result?.uri||'').trim();try{const parsed=new URL(value,'https://www.discogs.com');if(parsed.protocol==='https:'&&parsed.hostname==='www.discogs.com'&&/^\/(release|master)\/[^/]+/.test(parsed.pathname))return parsed.href}catch{}const id=Number(result?.id||result?.releaseId);return Number.isSafeInteger(id)&&id>0?`https://www.discogs.com/release/${id}`:'https://www.discogs.com'}
@@ -72,8 +72,8 @@ function renderPagination(id,page,total,pageSize,target,showEdges=false){
 }
 function sortRecords(items,mode,direction=['recent','year'].includes(mode)?'desc':'asc'){const records=[...items];const valueFor=(entry,field)=>{const record=entry.a||entry;const value=field==='album'?(record.album||record.title):record[field];return String(value||'').trim()};if(mode==='relevance'||(mode==='recent'&&!records.some(entry=>valueFor(entry,'addedAt'))))return direction==='asc'?records.reverse():records;return records.sort((left,right)=>{const field=mode==='recent'?'addedAt':mode;if(mode==='plays'){const count=entry=>{const record=entry.a||entry;const value=spotifyPlayCounts.get(record.uri)?.plays;return record.kind==='track'&&Number.isSafeInteger(value)&&value>0?value:null};const a=count(left),b=count(right);if(a===null)return b===null?0:1;if(b===null)return-1;return direction==='desc'?b-a:a-b}const a=valueFor(left,field);const b=valueFor(right,field);if(!a&&b)return 1;if(a&&!b)return-1;const order=a.localeCompare(b,undefined,{numeric:true,sensitivity:'base'});return direction==='desc'?-order:order})}
 function formatTagsFor(record){if(Array.isArray(record.formatTags)&&record.formatTags.length)return record.formatTags;const value=String(record.format||'').toLowerCase();const tags=[];if(/\bvinyl\b|\blp\b|\b12["″]?\b|\b10["″]?\b|\b7["″]?\b|shellac/.test(value))tags.push('vinyl');if(/\bcd\b|compact disc/.test(value))tags.push('cd');if(/cassette|\btape\b/.test(value))tags.push('cassette');return tags.length?tags:['other']}
-function renderCollection(){const matching=sortRecords(collection.map((a,index)=>({a,index})).filter(({a})=>collectionFilter==='all'||formatTagsFor(a).includes(collectionFilter)),collectionSort,document.querySelector('#collectionSortDirection').value);const pages=Math.max(1,Math.ceil(matching.length/collectionPageSize));collectionPage=Math.min(collectionPage,pages);const offset=(collectionPage-1)*collectionPageSize;const records=matching.slice(offset,offset+collectionPageSize);document.querySelector('#collectionGrid').innerHTML=records.map(({a,index})=>{const title=String(a.title||'').trim();const artist=String(a.artist||'').trim();const search=title&&title!=='Untitled release'?[title,artist==='Unknown artist'?'':artist].filter(Boolean).join(' ').slice(0,200).trim():'';const spotifyButton=search?`<button type="button" class="collection-spotify" data-title="${escapeHtml(title)}" data-artist="${escapeHtml(artist==='Unknown artist'?'':artist)}" aria-label="Find ${escapeHtml(title)} in Spotify">Find in Spotify →</button>`:'';const noteButton=a.source==='discogs'&&a.instanceId?`<button type="button" class="collection-notes-button" data-copy-instance="${a.instanceId}">${a.rcrdNotes?'Edit copy notes':'Add copy notes'}</button>`:'';const noteSummary=a.rcrdNotes?`<p class="collection-note-summary">${escapeHtml([a.rcrdNotes.condition,a.rcrdNotes.location,a.rcrdNotes.pricePaid,a.rcrdNotes.note].filter(Boolean).join(' · ').slice(0,180))}</p>`:'';return `<article class="collection-card" data-title="${escapeHtml(`${a.title} ${a.artist}`.toLowerCase())}" data-format="${escapeHtml(formatTagsFor(a).join(' '))}">${cover(a)}<div class="album-meta">${a.source==='discogs'?'':`<button class="remove-record" data-list="collection" data-index="${index}" aria-label="Remove ${escapeHtml(a.title)} from collection">×</button>`}<h3>${escapeHtml(a.title)}</h3><p>${artistSearchButton(a.artist,'discogs')} · ${escapeHtml(a.year)}</p>${a.source==='discogs'?'':`<div class="value">EST. VALUE ${a.price}</div>`}${spotifyButton}${noteButton}${noteSummary}${a.source==='discogs'?discogsDataCredit(a):''}</div></article>`}).join('')||`<p class="empty-state">${!apiConnected?'Connect Discogs to see your collection.':collectionFilter==='all'?'Your Discogs collection is ready for its first record.':`No ${escapeHtml(collectionFilter)} records were found.`}</p>`;renderPagination('collectionPagination',collectionPage,matching.length,collectionPageSize,'collection')}
-function renderWantlist(){const ordered=sortRecords(wantlist.map((a,index)=>({a,index})),wantlistSort,document.querySelector('#wantlistSortDirection').value);const pages=Math.max(1,Math.ceil(ordered.length/wantlistPageSize));wantlistPage=Math.min(wantlistPage,pages);const offset=(wantlistPage-1)*wantlistPageSize;const records=ordered.slice(offset,offset+wantlistPageSize);document.querySelector('#wantlistGrid').innerHTML=records.map(({a,index})=>{const releaseId=Number(a.releaseId);const releaseLink=a.source==='discogs'&&Number.isSafeInteger(releaseId)&&releaseId>0?`<a class="wantlist-shop" href="https://www.discogs.com/release/${releaseId}" target="_blank" rel="noopener noreferrer">Shop on Discogs ↗</a>`:'';return `<article class="want-card" data-title="${escapeHtml(`${a.title} ${a.artist}`.toLowerCase())}">${cover(a)}<div><h3>${escapeHtml(a.title)}</h3><p>${artistSearchButton(a.artist,'discogs')} · ${escapeHtml(a.year)}</p><button class="find-listing" data-album="${escapeHtml(`${a.artist} ${a.title}`)}">Find editions →</button>${releaseLink}${a.source==='discogs'?discogsDataCredit(a):''}${a.source==='discogs'?'':`<button class="remove-record secondary-action" data-list="wantlist" data-index="${index}">Remove</button>`}</div></article>`}).join('')||`<p class="empty-state">${apiConnected?'Your Discogs wantlist is clear.':'Connect Discogs to see your wantlist.'}</p>`;renderPagination('wantlistPagination',wantlistPage,ordered.length,wantlistPageSize,'wantlist')}
+function renderCollection(){const matching=sortRecords(collection.map((a,index)=>({a,index})).filter(({a})=>collectionFilter==='all'||formatTagsFor(a).includes(collectionFilter)),collectionSort,document.querySelector('#collectionSortDirection').value);const pages=Math.max(1,Math.ceil(matching.length/collectionPageSize));collectionPage=Math.min(collectionPage,pages);const offset=(collectionPage-1)*collectionPageSize;const records=matching.slice(offset,offset+collectionPageSize);document.querySelector('#collectionGrid').innerHTML=records.map(({a,index})=>{const title=String(a.title||'').trim();const artist=String(a.artist||'').trim();const search=title&&title!=='Untitled release'?[title,artist==='Unknown artist'?'':artist].filter(Boolean).join(' ').slice(0,200).trim():'';const spotifyButton=search?`<button type="button" class="collection-spotify" data-title="${escapeHtml(title)}" data-artist="${escapeHtml(artist==='Unknown artist'?'':artist)}" aria-label="Find ${escapeHtml(title)} in Spotify">Find in Spotify →</button>`:'';const noteButton=a.source==='discogs'&&a.instanceId?`<button type="button" class="collection-notes-button" data-copy-instance="${a.instanceId}">${a.rcrdNotes?'Edit copy notes':'Add copy notes'}</button>`:'';const noteSummary=a.rcrdNotes?`<p class="collection-note-summary">${escapeHtml([a.rcrdNotes.condition,a.rcrdNotes.location,a.rcrdNotes.pricePaid,a.rcrdNotes.note].filter(Boolean).join(' · ').slice(0,180))}</p>`:'';return `<article class="collection-card" data-title="${escapeHtml(`${a.title} ${a.artist}`.toLowerCase())}" data-format="${escapeHtml(formatTagsFor(a).join(' '))}">${cover(a)}<div class="album-meta">${a.source==='discogs'?'':`<button class="remove-record" data-list="collection" data-index="${index}" aria-label="Remove ${escapeHtml(a.title)} from collection">×</button>`}<h3>${escapeHtml(a.title)}</h3><p>${artistSearchButton(a.artist,'discogs')} · ${escapeHtml(a.year)}</p>${a.source==='discogs'?'':`<div class="value">EST. VALUE ${a.price}</div>`}<div class="collection-card-actions">${spotifyButton}${noteButton}</div>${noteSummary}${a.source==='discogs'?discogsDataCredit(a):''}</div></article>`}).join('')||`<p class="empty-state">${!apiConnected?'Connect Discogs to see your collection.':collectionFilter==='all'?'Your Discogs collection is ready for its first record.':`No ${escapeHtml(collectionFilter)} records were found.`}</p>`;renderPagination('collectionPagination',collectionPage,matching.length,collectionPageSize,'collection')}
+function renderWantlist(){const ordered=sortRecords(wantlist.map((a,index)=>({a,index})),wantlistSort,document.querySelector('#wantlistSortDirection').value);const pages=Math.max(1,Math.ceil(ordered.length/wantlistPageSize));wantlistPage=Math.min(wantlistPage,pages);const offset=(wantlistPage-1)*wantlistPageSize;const records=ordered.slice(offset,offset+wantlistPageSize);document.querySelector('#wantlistGrid').innerHTML=records.map(({a,index})=>{const releaseId=Number(a.releaseId);const releaseLink=a.source==='discogs'&&Number.isSafeInteger(releaseId)&&releaseId>0?`<a class="wantlist-shop" href="https://www.discogs.com/release/${releaseId}" target="_blank" rel="noopener noreferrer">Shop on Discogs ↗</a>`:'';return `<article class="want-card" data-title="${escapeHtml(`${a.title} ${a.artist}`.toLowerCase())}">${cover(a)}<div><h3>${escapeHtml(a.title)}</h3><p>${artistSearchButton(a.artist,'discogs')} · ${escapeHtml(a.year)}</p><div class="want-card-actions"><button class="find-listing" data-album="${escapeHtml(`${a.artist} ${a.title}`)}">Find editions →</button>${releaseLink}</div>${a.source==='discogs'?discogsDataCredit(a):''}${a.source==='discogs'?'':`<button class="remove-record secondary-action" data-list="wantlist" data-index="${index}">Remove</button>`}</div></article>`}).join('')||`<p class="empty-state">${apiConnected?'Your Discogs wantlist is clear.':'Connect Discogs to see your wantlist.'}</p>`;renderPagination('wantlistPagination',wantlistPage,ordered.length,wantlistPageSize,'wantlist')}
 let apiConnected=false;
 renderCollection();renderWantlist();
 let editingCollectionInstance=null;
@@ -387,6 +387,7 @@ function syncAlbumTrackLikedStatus(uri,saved,includeChecking=false){
 }
 function renderPlayerLiked(){
   const mix=document.querySelector('#playerMix');if(mix)mix.disabled=!spotifyConnected||!/^spotify:track:[A-Za-z0-9]{22}$/.test(spotifyTrackUri||'');
+  const list=document.querySelector('#playerMixList');if(list)list.hidden=!spotifyConnected||!spotifyTrackUri;
   const button=document.querySelector('#playerLiked');
   if(!button)return;
   const playable=Boolean(spotifyTrackUri);
@@ -438,6 +439,8 @@ function setCurrentSpotifyTrackUri(uri){
   if(next===spotifyTrackUri)return;
   closeLyricsDialog();
   spotifyTrackUri=next;
+  if(activeSpotifyMix){const index=next?activeSpotifyMix.tracks.findIndex(track=>track.uri===next):-1;if(index>=0){activeSpotifyMix.confirmed=true;renderActiveSpotifyMix()}else if((activeSpotifyMix.confirmed&&next)||Date.now()-activeSpotifyMix.startedAt>5000)clearActiveSpotifyMix(false)}
+  if(document.querySelector('#activeSpotifyMixDialog')?.open)void loadPlayingQueue();
   document.querySelector('#playerLyrics').disabled=!spotifyConnected||!next;
   const artwork=document.querySelector('#playerAlbumOpen');if(artwork){artwork.disabled=true;artwork.setAttribute('data-album-id','');artwork.setAttribute('aria-label','Album unavailable')}
   syncSpotifyAlbumTrackIndicator();
@@ -477,7 +480,7 @@ async function toggleCurrentTrackLiked(){
 }
 document.querySelector('#playerLiked').addEventListener('click',toggleCurrentTrackLiked);
 renderPlayerLiked();
-function resetSpotifyAccountUi(){resetSpotifyMix();resetCreatePlaylistUi();resetEditPlaylistUi();updateEditPlaylistButton();try{sessionStorage.removeItem('rcrd-private-playlist-draft')}catch{}spotifyCatalogAlbumView=null;spotifyCatalogResults=[];document.querySelector('#spotify .library-controls').hidden=false;document.querySelector('#spotifyGrid').classList.remove('collection-lookup-results');spotifyConnected=false;spotifyCanStream=false;spotifyCanModifyLibrary=false;spotifyCanModifyPrivatePlaylists=null;spotifyPlayerConnectFailed=false;++spotifyAccountGeneration;++likedRequestRevision;++spotifyLibraryRevision;resetListeningHistoryUi();resetSpotifyPlayCounts();likedStatus=null;likedCheckPending=false;likedMutationPending=false;spotifyLibraryNeedsRefresh=false;++spotifyPlaylistSequence;++spotifySearchSequence;clearTimeout(spotifySearchTimer);if(spotifySearchCompletion){spotifySearchCompletion();spotifySearchCompletion=null}spotifyHomeRequest=null;spotifyHomeNextRefresh=0;spotifyHomeRateLimitedUntil=0;spotifyLibraryAlbums=[];spotifySavedAlbums=[];spotifyLibraryTracks=[];spotifyLibraryPlaybackRecords=[];spotifyHomeRecommendations=[];spotifyLibraryLoaded=false;spotifySavedLibraryLoaded=false;spotifyPlaylistPreviewState=null;spotifyLibraryPromise=null;spotifyLibraryError='';spotifyTrackUri=null;renderPlayerLiked();spotifyDeviceId=null;spotifyPlayerState='waiting';spotifyPlayerIssue='';spotifyActiveDevice='Not checked';spotifySkipQueue=Promise.resolve();spotifySkipPending=0;spotifySkipBusy={next:0,previous:0};spotifyToggleQueue=Promise.resolve();spotifyTogglePending=0;spotifyModeQueue=Promise.resolve();spotifyPlaybackStartPending=0;document.querySelectorAll('#previousButton,#nextButton,#playButton').forEach(button=>button.setAttribute('aria-busy','false'));shuffleRequestPending=false;++shuffleRevision;const shuffleButton=document.querySelector('#shuffleButton');if(shuffleButton){shuffleButton.disabled=false;shuffleButton.setAttribute('aria-busy','false')}repeatRequestPending=false;++repeatRevision;const repeatButton=document.querySelector('#repeatButton');if(repeatButton){repeatButton.disabled=false;repeatButton.setAttribute('aria-busy','false')}if(spotifySyncTimer){clearInterval(spotifySyncTimer);spotifySyncTimer=null}clearTimeout(spotifyPlayerReadyTimer);spotifyPlayerReadyTimer=null;if(spotifyPlayer){try{spotifyPlayer.disconnect()}catch{}spotifyPlayer=null}const avatar=document.querySelector('#profileAvatar');avatar.classList.remove('has-image');avatar.classList.add('is-placeholder');avatar.style.backgroundImage='';avatar.textContent='?';document.querySelector('#profileName').textContent='Connect account';document.querySelector('#profileMeta').textContent='Spotify profile';const connect=document.querySelector('#connectSpotify');connect.textContent='Connect Spotify';connect.classList.remove('connected');document.querySelector('#spotifyReminder').hidden=true;const playlistSelect=document.querySelector('#spotifyPlaylistSelect');playlistSelect.disabled=true;playlistSelect.innerHTML='<option value="">Connect Spotify for playlists</option>';setSidebarPlaylistOptions([],'Connect Spotify for playlists',true);document.querySelector('#spotifyGrid').innerHTML='<p class="empty-state">Connect Spotify to load and search your saved library.</p>';document.querySelector('#spotifyPagination').innerHTML='';document.querySelector('#spotifyLibraryStatus').textContent='Not connected';showSpotifyLibraryNotice('Connect Spotify to load your saved albums, tracks, and playlists.');document.querySelector('#spotifyCacheMeta').textContent='';document.querySelector('#recommendations').innerHTML='<p class="empty-state">Connect Spotify to see recommendations from your listening.</p>';document.querySelector('#homeSpotifyPagination').innerHTML='';recentTracksData=[];renderListeningDiscogsSuggestions([],'Connect Spotify to see your recent plays.');setSong('Connect Spotify','Playback unavailable','');playing=false;updatePlaybackModes({repeat_state:'off',shuffle_state:false,context:null});const progress=document.querySelector('#playerProgress');progress.value=0;updateProgress(0,0);renderPlayer();renderSpotifyConnectionStatus({connected:false});document.querySelector('#spotifyCreatePlaylist').disabled=true}
+function resetSpotifyAccountUi(){resetSpotifyMix();clearActiveSpotifyMix();resetCreatePlaylistUi();resetEditPlaylistUi();updateEditPlaylistButton();try{sessionStorage.removeItem('rcrd-private-playlist-draft')}catch{}spotifyCatalogAlbumView=null;spotifyCatalogResults=[];document.querySelector('#spotify .library-controls').hidden=false;document.querySelector('#spotifyGrid').classList.remove('collection-lookup-results');spotifyConnected=false;spotifyCanStream=false;spotifyCanModifyLibrary=false;spotifyCanModifyPrivatePlaylists=null;spotifyPlayerConnectFailed=false;++spotifyAccountGeneration;++likedRequestRevision;++spotifyLibraryRevision;resetListeningHistoryUi();resetSpotifyPlayCounts();likedStatus=null;likedCheckPending=false;likedMutationPending=false;spotifyLibraryNeedsRefresh=false;++spotifyPlaylistSequence;++spotifySearchSequence;clearTimeout(spotifySearchTimer);if(spotifySearchCompletion){spotifySearchCompletion();spotifySearchCompletion=null}spotifyHomeRequest=null;spotifyHomeNextRefresh=0;spotifyHomeRateLimitedUntil=0;spotifyLibraryAlbums=[];spotifySavedAlbums=[];spotifyLibraryTracks=[];spotifyLibraryPlaybackRecords=[];spotifyHomeRecommendations=[];spotifyLibraryLoaded=false;spotifySavedLibraryLoaded=false;spotifyPlaylistPreviewState=null;spotifyLibraryPromise=null;spotifyLibraryError='';spotifyTrackUri=null;renderPlayerLiked();spotifyDeviceId=null;spotifyPlayerState='waiting';spotifyPlayerIssue='';spotifyActiveDevice='Not checked';spotifySkipQueue=Promise.resolve();spotifySkipPending=0;spotifySkipBusy={next:0,previous:0};spotifyToggleQueue=Promise.resolve();spotifyTogglePending=0;spotifyModeQueue=Promise.resolve();spotifyPlaybackStartPending=0;document.querySelectorAll('#previousButton,#nextButton,#playButton').forEach(button=>button.setAttribute('aria-busy','false'));shuffleRequestPending=false;++shuffleRevision;const shuffleButton=document.querySelector('#shuffleButton');if(shuffleButton){shuffleButton.disabled=false;shuffleButton.setAttribute('aria-busy','false')}repeatRequestPending=false;++repeatRevision;const repeatButton=document.querySelector('#repeatButton');if(repeatButton){repeatButton.disabled=false;repeatButton.setAttribute('aria-busy','false')}if(spotifySyncTimer){clearInterval(spotifySyncTimer);spotifySyncTimer=null}clearTimeout(spotifyPlayerReadyTimer);spotifyPlayerReadyTimer=null;if(spotifyPlayer){try{spotifyPlayer.disconnect()}catch{}spotifyPlayer=null}const avatar=document.querySelector('#profileAvatar');avatar.classList.remove('has-image');avatar.classList.add('is-placeholder');avatar.style.backgroundImage='';avatar.textContent='?';document.querySelector('#profileName').textContent='Connect account';document.querySelector('#profileMeta').textContent='Spotify profile';const connect=document.querySelector('#connectSpotify');connect.textContent='Connect Spotify';connect.classList.remove('connected');document.querySelector('#spotifyReminder').hidden=true;const playlistSelect=document.querySelector('#spotifyPlaylistSelect');playlistSelect.disabled=true;playlistSelect.innerHTML='<option value="">Connect Spotify for playlists</option>';setSidebarPlaylistOptions([],'Connect Spotify for playlists',true);document.querySelector('#spotifyGrid').innerHTML='<p class="empty-state">Connect Spotify to load and search your saved library.</p>';document.querySelector('#spotifyPagination').innerHTML='';document.querySelector('#spotifyLibraryStatus').textContent='Not connected';showSpotifyLibraryNotice('Connect Spotify to load your saved albums, tracks, and playlists.');document.querySelector('#spotifyCacheMeta').textContent='';document.querySelector('#recommendations').innerHTML='<p class="empty-state">Connect Spotify to see recommendations from your listening.</p>';document.querySelector('#homeSpotifyPagination').innerHTML='';recentTracksData=[];renderListeningDiscogsSuggestions([],'Connect Spotify to see your recent plays.');setSong('Connect Spotify','Playback unavailable','');playing=false;updatePlaybackModes({repeat_state:'off',shuffle_state:false,context:null});const progress=document.querySelector('#playerProgress');progress.value=0;updateProgress(0,0);renderPlayer();renderSpotifyConnectionStatus({connected:false});document.querySelector('#spotifyCreatePlaylist').disabled=true}
 function spotifyRenewalNoticeKey(status){return status.needsReauthorization?`due:${status.refreshDueAt||0}`:`warning:${status.refreshDueAt||0}`}
 function renderProfileRenewalNotice(status){
   const days=Number.isFinite(status.daysRemaining)?Math.max(0,status.daysRemaining):null;
@@ -1339,7 +1342,8 @@ async function syncCurrentSpotifyTrack(force=false){
     const device=item?.device;
     spotifyActiveDevice=device?.is_active===false?'None reported':device?.id&&device.id===spotifyDeviceId?'RCRD · Spotify':typeof device?.name==='string'&&device.name.trim()?device.name.trim().slice(0,80):'None reported';
     if(device?.is_active&&typeof device.id==='string'&&/^[A-Za-z0-9_-]{1,200}$/.test(device.id)&&!spotifyTargetDeviceId){spotifyTargetDeviceId=device.id;spotifyTargetSupportsVolume=device.supports_volume!==false;document.querySelector('#volumeControl').disabled=!spotifyTargetSupportsVolume;renderVolumeControl()}
-    renderPlaybackHealth();updatePlaybackModes(item);applySpotifyActionAvailability(item?.actions);
+    renderPlaybackHealth();const previousShuffle=shuffleEnabled;updatePlaybackModes(item);applySpotifyActionAvailability(item?.actions);
+    if(previousShuffle!==shuffleEnabled&&document.querySelector('#activeSpotifyMixDialog')?.open)setTimeout(()=>{if(generation===spotifyAccountGeneration)void loadPlayingQueue()},400);
     if(item?.item){const track=item.item;setCurrentSpotifyTrackUri(track.uri);setSong(track.name,track.artists?.map(artist=>artist.name).join(', ')||'Spotify',track.album?.images?.[0]?.url||'',track.album);playing=item.is_playing;updateProgress(item.progress_ms||0,track.duration_ms||0);renderPlayer()}
     else{setCurrentSpotifyTrackUri(null);setSong('Nothing playing','Playback unavailable','');playing=false;updateProgress(0,0);renderPlayer()}
   }catch{if(current()){spotifyActiveDevice='Unavailable';renderPlaybackHealth()}}
@@ -1506,10 +1510,10 @@ function spotifyMixTrack(track){
   const titleKey=mixTextKey(name.replace(/\s*[-(\[]\s*(?:\d{4}\s*)?remaster(?:ed)?[^)\]]*[)\]]?\s*$/i,''));
   return {uri:track.uri,title:name,artist:artists.map(artist=>artist.name).join(', '),artists:artists.map(artist=>({id:artist.id,name:artist.name})),album:typeof track.album?.name==='string'?track.album.name.slice(0,300):'Album unavailable',albumId:/^[A-Za-z0-9]{22}$/.test(track.album?.id||'')?track.album.id:'',durationMs:Number.isSafeInteger(track.duration_ms)&&track.duration_ms>0?track.duration_ms:0,modes,titleKey,isrc:/^[A-Za-z0-9]{12}$/.test(track.external_ids?.isrc||'')?track.external_ids.isrc.toUpperCase():''};
 }
-function buildSpotifyMix(seedTrack,sources){
+function buildSpotifyMix(seedTrack,sources,direction='balanced'){
   const seed=spotifyMixTrack(seedTrack);if(!seed)return [];
   const lead=seed.artists[0].id;
-  const evidence=new Map();const discovery=new Map();const pool=[];const seenLists=new Set();
+  const evidence=new Map();const discovery=new Map();const pool=[];const knownUris=new Set();const seenLists=new Set();
   for(const artist of (Array.isArray(sources?.discoveryArtists)?sources.discoveryArtists:[]).slice(0,40)){
     if(typeof artist?.id!=='string'||!/^[A-Za-z0-9]{22}$/.test(artist.id)||!['listenbrainz','discogs-style'].includes(artist.source))continue;
     if(artist.source==='discogs-style'&&(typeof artist.style!=='string'||!artist.style.trim()||artist.style.length>80||/[\u0000-\u001f\u007f]/.test(artist.style)))continue;
@@ -1524,16 +1528,28 @@ function buildSpotifyMix(seedTrack,sources){
     // A very broad playlist is weak evidence of an artist relationship.
     if(credits.size>80)continue;
     for(const [artist,songs] of credits){const previous=evidence.get(artist)||{lists:0,songs:0,score:0};previous.lists++;previous.songs+=songs.size;previous.score+=Math.min(songs.size,5)/Math.max(1,credits.size);evidence.set(artist,previous);}
-    pool.push(...tracks);
+    pool.push(...tracks);for(const track of tracks)knownUris.add(track.uri);
   }
-  pool.push(...(Array.isArray(sources?.savedTracks)?sources.savedTracks:[]).slice(0,10000).map(spotifyMixTrack).filter(Boolean));
+  const saved=(Array.isArray(sources?.savedTracks)?sources.savedTracks:[]).slice(0,10000).map(spotifyMixTrack).filter(Boolean);
+  pool.push(...saved);for(const track of saved)knownUris.add(track.uri);
   pool.push(...(Array.isArray(sources?.discoveryTracks)?sources.discoveryTracks:[]).slice(0,1000).map(spotifyMixTrack).filter(Boolean));
   const candidates=pool.filter(track=>{const relation=evidence.get(track.artists[0].id);return (track.artists.some(artist=>artist.id===lead)||relation&&(relation.songs>=2||relation.lists>=2)||discovery.has(track.artists[0].id))&&track.modes.every(mode=>seed.modes.includes(mode));});
   const count=track=>Number.isSafeInteger(sources?.playCounts?.[track.uri])&&sources.playCounts[track.uri]>0?sources.playCounts[track.uri]:0;
+  const familiar=track=>knownUris.has(track.uri)||count(track)>0;
   candidates.sort((a,b)=>(evidence.get(b.artists[0].id)?.score||0)-(evidence.get(a.artists[0].id)?.score||0)||count(b)-count(a)||Number(a.albumId===seed.albumId)-Number(b.albumId===seed.albumId)||a.title.localeCompare(b.title));
+  const familiarCandidates=candidates.filter(familiar);const discoveryCandidates=candidates.filter(track=>!familiar(track));
+  if(direction==='familiar')candidates.splice(0,candidates.length,...familiarCandidates,...discoveryCandidates);
+  else if(direction==='discover')candidates.splice(0,candidates.length,...discoveryCandidates,...familiarCandidates);
+  else if(familiarCandidates.length&&discoveryCandidates.length){
+    candidates.length=0;let knownIndex=0;let newIndex=0;
+    while(knownIndex<familiarCandidates.length||newIndex<discoveryCandidates.length){
+      for(let index=0;index<2&&knownIndex<familiarCandidates.length;index++)candidates.push(familiarCandidates[knownIndex++]);
+      if(newIndex<discoveryCandidates.length)candidates.push(discoveryCandidates[newIndex++]);
+    }
+  }
   const songKey=track=>`${track.titleKey}|${track.artists.map(artist=>artist.id).sort().join(',')}`;
   const seenUris=new Set([seed.uri]);const seenSongs=new Set([songKey(seed)]);const seenIsrc=new Set(seed.isrc?[seed.isrc]:[]);
-  const selected=[{...seed,reason:'Starting song'}];const artistCounts=new Map([[lead,1]]);const albumCounts=new Map(seed.albumId?[[seed.albumId,1]]:[]);
+  const selected=[{...seed,reason:'Starting song',familiar:true}];const artistCounts=new Map([[lead,1]]);const albumCounts=new Map(seed.albumId?[[seed.albumId,1]]:[]);
   while(candidates.length&&selected.length<100){
     let index=candidates.findIndex(track=>track.artists[0].id!==selected.at(-1).artists[0].id);if(index<0)index=0;
     const track=candidates.splice(index,1)[0];const primary=track.artists[0].id;const key=songKey(track);
@@ -1541,7 +1557,7 @@ function buildSpotifyMix(seedTrack,sources){
     seenUris.add(track.uri);seenSongs.add(key);if(track.isrc)seenIsrc.add(track.isrc);
     artistCounts.set(primary,(artistCounts.get(primary)||0)+1);if(track.albumId)albumCounts.set(track.albumId,(albumCounts.get(track.albumId)||0)+1);
     const relation=evidence.get(primary);const related=discovery.get(primary);
-    selected.push({...track,reason:primary===lead?'Same lead artist':track.artists.some(artist=>artist.id===lead)?'Direct collaboration with the lead artist':relation&&(relation.songs>=2||relation.lists>=2)?`Shares ${relation.lists} of your playlists with the starting artist`:related.source==='listenbrainz'?'Related artist via ListenBrainz':`Shares Discogs style: ${related.style}`});
+    selected.push({...track,familiar:familiar(track),reason:primary===lead?'Same lead artist':track.artists.some(artist=>artist.id===lead)?'Direct collaboration with the lead artist':relation&&(relation.songs>=2||relation.lists>=2)?`Shares ${relation.lists} of your playlists with the starting artist`:related.source==='listenbrainz'?'Related artist via ListenBrainz':`Shares Discogs style: ${related.style}`});
   }
   return selected;
 }
@@ -1568,14 +1584,75 @@ function resetSpotifyMix(){
   const start=document.querySelector('#spotifyMixStart');if(start){start.disabled=true;start.setAttribute('aria-busy','false')}
   const save=document.querySelector('#spotifyMixSave');if(save){save.disabled=true;save.setAttribute('aria-busy','false')}
   document.querySelector('#spotifyMixSaveStatus').textContent='';
+  document.querySelector('#spotifyMixLength').value='25';
+  document.querySelector('#spotifyMixDirection').value='balanced';
+}
+function renderActiveSpotifyMix(){
+  const active=activeSpotifyMix&&spotifyConnected&&activeSpotifyMix.generation===spotifyAccountGeneration?activeSpotifyMix:null;
+  const section=document.querySelector('#activeSpotifyMixSelection');section.hidden=!active;
+  if(!active)return;
+  document.querySelector('#activeSpotifyMixSelectionSummary').textContent=`Full Mix selection · ${active.tracks.length} songs`;
+  document.querySelector('#activeSpotifyMixSelectedTracks').innerHTML=active.tracks.map((track,position)=>`<li class="active-mix-track${track.uri===spotifyTrackUri?' is-current':''}" ${track.uri===spotifyTrackUri?'aria-current="true"':''}><span class="active-mix-number">${position+1}</span><span><strong>${escapeHtml(track.title)}</strong><small>${escapeHtml(track.artist)} · ${escapeHtml(track.album)}</small></span>${track.uri===spotifyTrackUri?'<em>Current</em>':''}</li>`).join('');
+}
+function clearActiveSpotifyMix(closeDialog=true){
+  activeSpotifyMix=null;
+  ++playingQueueRevision;
+  const dialog=document.querySelector('#activeSpotifyMixDialog');if(closeDialog&&dialog?.open)dialog.close();
+  document.querySelector('#activeSpotifyMixSelection').hidden=true;
+}
+async function openActiveSpotifyMix(){
+  if(!spotifyConnected||!spotifyTrackUri)return;
+  const dialog=document.querySelector('#activeSpotifyMixDialog');if(dialog.open)return;
+  dialog.showModal();renderActiveSpotifyMix();await loadPlayingQueue();
+}
+async function loadPlayingQueue(){
+  const dialog=document.querySelector('#activeSpotifyMixDialog');if(!dialog.open||!spotifyConnected)return;
+  const generation=spotifyAccountGeneration;const revision=++playingQueueRevision;
+  const status=document.querySelector('#activeSpotifyMixStatus');const list=document.querySelector('#activeSpotifyMixTracks');const note=document.querySelector('#activeSpotifyMixNote');status.textContent='Loading upcoming songs from Spotify…';list.innerHTML='';note.textContent='';
+  try{
+    const response=await fetch('/api/spotify/queue');const data=await response.json();
+    if(!dialog.open||generation!==spotifyAccountGeneration||revision!==playingQueueRevision||!spotifyConnected)return;
+    if(!response.ok)throw new Error(data.error||'Could not load the playing queue.');
+    const tracks=[data.current,...(Array.isArray(data.upcoming)?data.upcoming:[])].filter(track=>track&&typeof track.title==='string');
+    const upcoming=tracks.length-Number(Boolean(data.current));status.textContent=tracks.length?`${upcoming} ${upcoming===1?'song':'songs'} coming up`:'Spotify has no current or upcoming songs to show.';
+    note.textContent=tracks.length?'Spotify may change or extend the queue as playback continues.':'';
+    list.innerHTML=tracks.map((track,index)=>`<li class="active-mix-track${index===0&&data.current?' is-current':''}" ${index===0&&data.current?'aria-current="true"':''}><span class="active-mix-number">${index+1}</span><span><strong>${escapeHtml(track.title)}</strong><small>${escapeHtml(track.artist||track.album||'Spotify')}</small></span>${index===0&&data.current?'<em>Current</em>':''}</li>`).join('');
+  }catch(error){if(dialog.open&&generation===spotifyAccountGeneration&&revision===playingQueueRevision){status.textContent=error.message||'Could not load the playing queue.';list.innerHTML='';note.textContent=activeSpotifyMix?'Your full Mix selection is still available below.':''}}
+}
+function renderSpotifyMixTracks(selectedUris){
+  const preview=spotifyMixPreview;if(!preview)return;
+  const row=(track,index)=>`<div class="mix-track"><label><input type="checkbox" data-mix-index="${index}" ${selectedUris.has(track.uri)?'checked':''} ${index===0?'disabled':''}><span><strong>${escapeHtml(track.title)}</strong><span>${escapeHtml(track.artist)} · ${escapeHtml(track.album)}</span><small>${escapeHtml(track.reason)}</small></span></label>${index?`<button type="button" class="mix-swap" data-mix-swap="${index}" aria-label="Swap ${escapeHtml(track.title)} for another suggestion">Swap</button>`:''}</div>`;
+  const selected=[];const alternatives=[];preview.tracks.forEach((track,index)=>(selectedUris.has(track.uri)?selected:alternatives).push(row(track,index)));
+  document.querySelector('#spotifyMixTracks').innerHTML=`<div class="mix-selected">${selected.join('')}</div>${alternatives.length?`<details class="mix-alternatives"><summary>${alternatives.length} more suggestions</summary>${alternatives.join('')}</details>`:''}`;
+  updateSpotifyMixSelection();
+}
+function setSpotifyMixLength(){
+  const preview=spotifyMixPreview;if(!preview||preview.generation!==spotifyAccountGeneration)return;
+  const desired=Number(document.querySelector('#spotifyMixLength').value);if(![25,50,100].includes(desired))return;
+  renderSpotifyMixTracks(new Set(preview.tracks.slice(0,desired).map(track=>track.uri)));
+}
+function setSpotifyMixDirection(){
+  const preview=spotifyMixPreview;if(!preview||preview.generation!==spotifyAccountGeneration)return;
+  const direction=document.querySelector('#spotifyMixDirection').value;if(!Object.hasOwn(preview.variants,direction))return;
+  preview.tracks=preview.variants[direction].slice();setSpotifyMixLength();
+}
+function swapSpotifyMixTrack(index){
+  const preview=spotifyMixPreview;if(!preview||preview.generation!==spotifyAccountGeneration||!Number.isSafeInteger(index)||index<1||index>=preview.tracks.length)return;
+  const selected=new Set(selectedSpotifyMixTracks().map(track=>track.uri));const outgoing=preview.tracks[index];if(!selected.has(outgoing.uri))return;
+  const replacementIndex=preview.tracks.findIndex((track,candidateIndex)=>candidateIndex>0&&!selected.has(track.uri)&&track.artists[0].id!==outgoing.artists[0].id);
+  if(replacementIndex<0)return;
+  const replacement=preview.tracks[replacementIndex];preview.tracks[replacementIndex]=outgoing;preview.tracks[index]=replacement;selected.delete(outgoing.uri);selected.add(replacement.uri);
+  renderSpotifyMixTracks(selected);
 }
 function selectedSpotifyMixTracks(){return [...document.querySelectorAll('#spotifyMixTracks input:checked')].map(input=>spotifyMixPreview?.tracks[Number(input.dataset.mixIndex)]).filter(Boolean)}
 function updateSpotifyMixSelection(){
   const selected=selectedSpotifyMixTracks();const count=selected.length;const valid=!!spotifyMixPreview&&spotifyMixPreview.generation===spotifyAccountGeneration&&spotifyConnected&&count>=10&&count<=100&&new Set(selected.map(track=>track.uri)).size===count&&selected[0]?.uri===spotifyMixPreview.tracks[0].uri;
+  document.querySelectorAll('#spotifyMixTracks .mix-swap').forEach(button=>{button.hidden=count===spotifyMixPreview?.tracks.length||!document.querySelector(`#spotifyMixTracks input[data-mix-index="${button.dataset.mixSwap}"]`)?.checked;});
   document.querySelector('#spotifyMixStart').disabled=!valid||document.querySelector('#spotifyMixStart').getAttribute('aria-busy')==='true';
   document.querySelector('#spotifyMixSave').disabled=!valid||!document.querySelector('#spotifyMixPlaylistName').value.trim()||document.querySelector('#spotifyMixSave').getAttribute('aria-busy')==='true';
   const duration=selected.reduce((total,track)=>total+(track.durationMs||0),0);const runtime=duration?` · about ${Math.round(duration/60000)} minutes${selected.some(track=>!track.durationMs)?' (known durations only)':''}`:'';
-  document.querySelector('#spotifyMixStatus').textContent=`${count} tracks selected${runtime}. ${count<10?'Select at least 10 unique tracks.':'Start mix will replace the current playback sequence. Spotify shuffle and repeat settings still apply.'}${spotifyMixPreview?.warning?' '+spotifyMixPreview.warning:''}`;
+  const known=selected.filter(track=>track.familiar).length;const mix=spotifyMixPreview?` · ${known} from your music, ${count-known} discovery suggestions`:'';
+  document.querySelector('#spotifyMixStatus').textContent=`${count} tracks selected${runtime}${mix}. ${count<10?'Select at least 10 unique tracks.':'Start mix will replace the current playback sequence. Spotify shuffle and repeat settings still apply.'}${spotifyMixPreview?.warning?' '+spotifyMixPreview.warning:''}`;
 }
 async function openSpotifyMix(){
   const dialog=document.querySelector('#spotifyMixDialog');if(dialog.open)return;
@@ -1593,18 +1670,16 @@ async function openSpotifyMix(){
     if(sources.seed?.uri!==uri||!Array.isArray(sources.playlists)||!Array.isArray(sources.savedTracks))throw new Error('Spotify returned invalid Mix source data.');
     const tracks=buildSpotifyMix(playback.item,sources);const warning=spotifyMixSourceWarnings(sources);
     if(tracks.length<10){status.textContent=`Only ${tracks.length} unique tracks qualified; at least 10 are required.${warning?' '+warning:''}`;return}
-    spotifyMixPreview={generation,tracks,warning};
-    document.querySelector('#spotifyMixTracks').innerHTML=tracks.map((track,index)=>`<label class="mix-track"><input type="checkbox" data-mix-index="${index}" checked ${index===0?'disabled':''}><span><strong>${escapeHtml(track.title)}</strong><span>${escapeHtml(track.artist)} · ${escapeHtml(track.album)}</span><small>${escapeHtml(track.reason)}</small></span></label>`).join('');
-    updateSpotifyMixSelection();
+    spotifyMixPreview={generation,tracks,variants:{balanced:tracks,familiar:buildSpotifyMix(playback.item,sources,'familiar'),discover:buildSpotifyMix(playback.item,sources,'discover')},warning};setSpotifyMixLength();
   }catch(error){if(current())status.textContent=error.name==='AbortError'?'Mix lookup timed out. Close this preview and try again.':error.message||'Could not build this mix.';}
   finally{clearTimeout(timeout);if(spotifyMixController===controller)spotifyMixController=null;}
 }
 async function startSpotifyMix(){
   const preview=spotifyMixPreview;const button=document.querySelector('#spotifyMixStart');if(button.disabled||button.getAttribute('aria-busy')==='true'||!preview||!spotifyConnected||preview.generation!==spotifyAccountGeneration)return;
-  const selected=selectedSpotifyMixTracks().map(track=>track.uri);
+  const tracks=selectedSpotifyMixTracks();const selected=tracks.map(track=>track.uri);
   if(selected.length<10||selected.length>100||new Set(selected).size!==selected.length||selected[0]!==preview.tracks[0].uri||selected.some(uri=>!/^spotify:track:[A-Za-z0-9]{22}$/.test(uri||'')))return;
   button.disabled=true;button.setAttribute('aria-busy','true');
-  try{const started=await playSpotifyUri(selected[0],'',selected);if(started&&preview===spotifyMixPreview&&preview.generation===spotifyAccountGeneration)document.querySelector('#spotifyMixDialog').close();}
+  try{const started=await playSpotifyUri(selected[0],'',selected,'mix');if(started&&preview===spotifyMixPreview&&preview.generation===spotifyAccountGeneration){activeSpotifyMix={generation:preview.generation,tracks:tracks.map(track=>({uri:track.uri,title:track.title,artist:track.artist,album:track.album})),startedAt:Date.now(),confirmed:spotifyTrackUri===selected[0]};renderActiveSpotifyMix();document.querySelector('#spotifyMixDialog').close();}}
   finally{if(preview===spotifyMixPreview){button.setAttribute('aria-busy','false');updateSpotifyMixSelection();}}
 }
 async function saveSpotifyMix(){
@@ -1618,10 +1693,17 @@ document.querySelector('#playerMix').addEventListener('click',openSpotifyMix);
 document.querySelector('#spotifyMixStart').addEventListener('click',startSpotifyMix);
 document.querySelector('#spotifyMixSave').addEventListener('click',saveSpotifyMix);
 document.querySelector('#spotifyMixPlaylistName').addEventListener('input',updateSpotifyMixSelection);
+document.querySelector('#spotifyMixLength').addEventListener('change',setSpotifyMixLength);
+document.querySelector('#spotifyMixDirection').addEventListener('change',setSpotifyMixDirection);
 document.querySelector('#spotifyMixClose').addEventListener('click',()=>document.querySelector('#spotifyMixDialog').close());
 document.querySelector('#spotifyMixDialog').addEventListener('close',()=>{if(!document.querySelector('#spotifyMixDialog').open)resetSpotifyMix();});
 document.querySelector('#spotifyMixDialog').addEventListener('pointerdown',handleAboutDialogBackdropPointer);
 document.querySelector('#spotifyMixTracks').addEventListener('change',updateSpotifyMixSelection);
+document.querySelector('#spotifyMixTracks').addEventListener('click',event=>{const button=event.target.closest('[data-mix-swap]');if(button)swapSpotifyMixTrack(Number(button.dataset.mixSwap));});
+document.querySelector('#playerMixList').addEventListener('click',openActiveSpotifyMix);
+document.querySelector('#activeSpotifyMixClose').addEventListener('click',()=>document.querySelector('#activeSpotifyMixDialog').close());
+document.querySelector('#activeSpotifyMixDialog').addEventListener('pointerdown',handleAboutDialogBackdropPointer);
+document.querySelector('#activeSpotifyMixDialog').addEventListener('close',()=>{++playingQueueRevision});
 function followingSavedTrackUris(records,index,uri){if(!Number.isSafeInteger(index)||index<0||records[index]?.uri!==uri||records[index]?.kind!=='track'||!/^spotify:track:[A-Za-z0-9]+$/.test(uri))return [];const uris=[];for(let offset=0;offset<records.length&&uris.length<50;offset++){const record=records[(index+offset)%records.length];if(record.kind==='track'&&/^spotify:track:[A-Za-z0-9]+$/.test(record.uri))uris.push(record.uri)}return uris.length>1?uris:[]}
 async function waitForSpotifyPlaybackState(deviceId,generation,matches,description){
   for(let attempt=0;attempt<5;attempt++){
@@ -1634,7 +1716,7 @@ async function waitForSpotifyPlaybackState(deviceId,generation,matches,descripti
   }
   throw new Error(`Spotify did not confirm ${description}. Try again.`);
 }
-async function playSpotifyUri(uri,contextUri='',uris=[]){
+async function playSpotifyUri(uri,contextUri='',uris=[],source='other'){
   const generation=spotifyAccountGeneration;
   try{
     if((spotifyTargetDeviceId||spotifyDeviceId)===spotifyDeviceId&&spotifyPlayer?.activateElement)await spotifyPlayer.activateElement();
@@ -1676,6 +1758,7 @@ async function playSpotifyUri(uri,contextUri='',uris=[]){
       spotifyHasContext=Boolean(contextUri)||!uri.startsWith('spotify:track:');
     }
     if(generation!==spotifyAccountGeneration)return false;
+    if(source!=='mix'&&activeSpotifyMix)clearActiveSpotifyMix();
     showToast('Spotify playback started');return true;
   }catch(error){if(generation===spotifyAccountGeneration)showToast(error.message);return false}
 }
@@ -1818,6 +1901,7 @@ async function runPlaybackAction(action){
         if(generation!==spotifyAccountGeneration)return;
         ++shuffleRevision;
         updatePlaybackModes({shuffle_state:nextState});
+        if(document.querySelector('#activeSpotifyMixDialog')?.open)setTimeout(()=>{if(generation===spotifyAccountGeneration)void loadPlayingQueue()},400);
       });
       spotifyModeQueue=request.catch(()=>{});
       try{await request}finally{if(generation===spotifyAccountGeneration){shuffleRequestPending=false;if(button){button.disabled=button.dataset.playbackUnavailable==='true';button.setAttribute('aria-busy','false')}}}

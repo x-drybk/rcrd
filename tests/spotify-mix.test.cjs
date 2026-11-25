@@ -8,12 +8,13 @@ function track(n,extra={}){return {type:'track',uri:`spotify:track:${id(n)}`,nam
 const seed=track(1000);
 function sources(){return {seed,playlists:[{id:id(400),tracks:[seed,...Array.from({length:120},(_,i)=>track(i+1,{artists:[{id:id(2+Math.floor(i/10)),name:`Linked artist ${Math.floor(i/10)}`}]}))]}],savedTracks:[],playCounts:{},partial:false};}
 function discoverySources(){const data=sources();const discoveryTracks=data.playlists[0].tracks.slice(1);return {...data,playlists:[],discoveryTracks,discoveryArtists:[...new Map(discoveryTracks.map(track=>[track.artists[0].id,{id:track.artists[0].id,source:'listenbrainz'}])).values()],discoveryWarnings:[]};}
+function mixedSources(){const data=sources();const discoveryTracks=Array.from({length:80},(_,i)=>track(200+i,{artists:[{id:id(200+Math.floor(i/10)),name:`New artist ${Math.floor(i/10)}`}]}));return {...data,discoveryTracks,discoveryArtists:[...new Map(discoveryTracks.map(item=>[item.artists[0].id,{id:item.artists[0].id,source:'listenbrainz'}])).values()]};}
 function harness(fetch=async()=>{throw new Error('Unexpected request');}){
   const nodes=new Map();let checks=[];const requests=[];const plays=[];
-  const node=selector=>{if(!nodes.has(selector)){let html='';const element={disabled:false,open:false,attributes:{},textContent:'',value:selector==='#spotifyMixPlaylistName'?'RCRD Mix':'',children:[],setAttribute(name,value){this.attributes[name]=String(value);},getAttribute(name){return this.attributes[name];},showModal(){this.open=true;},close(){this.open=false;},replaceChildren(...children){this.children=children;this.textContent=children.filter(item=>typeof item==='string').join('');},append(...children){this.children.push(...children);}};Object.defineProperty(element,'innerHTML',{get:()=>html,set:value=>{html=value;if(selector==='#spotifyMixTracks')checks=[...value.matchAll(/data-mix-index="(\d+)"/g)].map(match=>({checked:true,dataset:{mixIndex:match[1]}}));}});nodes.set(selector,element);}return nodes.get(selector);};
-  const context=vm.createContext({document:{querySelector:node,querySelectorAll:()=>checks.filter(input=>input.checked),createElement:()=>({})},AbortController,setTimeout,clearTimeout,fetch:(url,options)=>{requests.push({url,options});return fetch(url,options);},playSpotifyUri:async(...args)=>{plays.push(args);return true;},showToast:()=>{}});
-  vm.runInContext(`let spotifyConnected=true,spotifyAccountGeneration=0,spotifyTrackUri='${seed.uri}',spotifyMixRevision=0,spotifyMixController=null,spotifyMixPreview=null;`,context);
-  for(const name of ['escapeHtml','mixTextKey','spotifyMixTrack','buildSpotifyMix','spotifyMixSourceWarnings','resetSpotifyMix','selectedSpotifyMixTracks','updateSpotifyMixSelection','openSpotifyMix','startSpotifyMix','saveSpotifyMix'])vm.runInContext(definition(name),context);
+  const node=selector=>{if(!nodes.has(selector)){let html='';const element={disabled:false,open:false,attributes:{},textContent:'',value:selector==='#spotifyMixPlaylistName'?'RCRD Mix':selector==='#spotifyMixLength'?'25':selector==='#spotifyMixDirection'?'balanced':'',children:[],setAttribute(name,value){this.attributes[name]=String(value);},getAttribute(name){return this.attributes[name];},showModal(){this.open=true;},close(){this.open=false;},replaceChildren(...children){this.children=children;this.textContent=children.filter(item=>typeof item==='string').join('');},append(...children){this.children.push(...children);}};Object.defineProperty(element,'innerHTML',{get:()=>html,set:value=>{html=value;if(selector==='#spotifyMixTracks')checks=[...value.matchAll(/<input type="checkbox" data-mix-index="(\d+)"([^>]*)>/g)].map(match=>({checked:/\bchecked\b/.test(match[2]),dataset:{mixIndex:match[1]}}));}});nodes.set(selector,element);}return nodes.get(selector);};
+  const context=vm.createContext({document:{querySelector:node,querySelectorAll:selector=>selector==='#spotifyMixTracks input:checked'?checks.filter(input=>input.checked):[],createElement:()=>({})},AbortController,setTimeout,clearTimeout,fetch:(url,options)=>{requests.push({url,options});return fetch(url,options);},playSpotifyUri:async(...args)=>{plays.push(args);return true;},showToast:()=>{}});
+  vm.runInContext(`let spotifyConnected=true,spotifyAccountGeneration=0,spotifyTrackUri='${seed.uri}',spotifyMixRevision=0,spotifyMixController=null,spotifyMixPreview=null,activeSpotifyMix=null,playingQueueRevision=0;`,context);
+  for(const name of ['escapeHtml','mixTextKey','spotifyMixTrack','buildSpotifyMix','spotifyMixSourceWarnings','resetSpotifyMix','renderActiveSpotifyMix','clearActiveSpotifyMix','openActiveSpotifyMix','loadPlayingQueue','renderSpotifyMixTracks','setSpotifyMixLength','setSpotifyMixDirection','swapSpotifyMixTrack','selectedSpotifyMixTracks','updateSpotifyMixSelection','openSpotifyMix','startSpotifyMix','saveSpotifyMix'])vm.runInContext(definition(name),context);
   return {node,context,requests,plays,checks:()=>checks,run:code=>vm.runInContext(code,context),build:(data,s=seed)=>{context.seedFixture=s;context.sourcesFixture=data;return vm.runInContext('buildSpotifyMix(seedFixture,sourcesFixture)',context);}};
 }
 function provider(data=sources()){return async url=>({ok:true,json:async()=>url==='/api/spotify/currently-playing'?{item:seed}:data});}
@@ -26,6 +27,17 @@ test('public discovery alone selects 100 exact artist-ID matches without persona
   const data=discoverySources();assert.equal(data.playlists.length,0);assert.equal(data.savedTracks.length,0);
   const mix=harness().build(data);assert.equal(mix.length,100);assert.equal(mix[0].uri,seed.uri);assert.ok(mix.slice(1).every(track=>track.reason==='Related artist via ListenBrainz'));
   assert.ok(new Set(mix.map(track=>track.artists[0].id)).size>=10);assert.equal(new Set(mix.map(track=>track.uri)).size,100);
+});
+test('Familiar and Discover steer eligible candidates while the seed and deduplication stay fixed',()=>{
+  const data=mixedSources();const h=harness();
+  h.context.seedFixture=seed;h.context.sourcesFixture=data;
+  const familiar=h.run("buildSpotifyMix(seedFixture,sourcesFixture,'familiar')");
+  const discover=h.run("buildSpotifyMix(seedFixture,sourcesFixture,'discover')");
+  const base=h.run("buildSpotifyMix(seedFixture,sourcesFixture,'balanced')");
+  const known=items=>items.slice(0,25).filter(item=>item.familiar).length;
+  assert.equal(base[0].uri,seed.uri);assert.equal(familiar[0].uri,seed.uri);assert.equal(discover[0].uri,seed.uri);
+  assert.ok(known(familiar)>known(base));assert.ok(known(base)>known(discover));
+  for(const mix of [base,familiar,discover])assert.equal(new Set(mix.map(item=>item.uri)).size,mix.length);
 });
 test('discovery accepts only approved exact primary artist IDs and validated source metadata',()=>{
   const approved={id:id(91),source:'listenbrainz'};const approvedArtist={id:approved.id,name:'Related Artist'};const data={discoveryArtists:[approved],discoveryTracks:[track(1,{artists:[approvedArtist]}),track(2,{artists:[{id:id(92),name:approvedArtist.name}]}),track(3,{artists:[{id:id(93),name:'Unapproved lead'},approvedArtist]})]};
@@ -70,9 +82,47 @@ test('duplicate URIs, remasters, reordered credits and ISRCs are removed; album 
 test('imported counts rank only eligible songs',()=>{const data=sources();data.playCounts[track(10).uri]=10000;assert.equal(harness().build(data)[1].uri,track(10).uri);});
 test('invalid seed cannot produce a mix',()=>{for(const value of [null,{...seed,uri:'bad'},{...seed,artists:[]},{...seed,is_playable:false}])assert.equal(harness().build(sources(),value).length,0);});
 test('preview never auto-plays; selected short mix starts only with at least ten songs',async()=>{
-  const h=harness(provider());await h.run('openSpotifyMix()');assert.equal(h.plays.length,0);assert.equal(h.requests.length,2);assert.equal(h.checks().length,100);
+  const h=harness(provider());await h.run('openSpotifyMix()');assert.equal(h.plays.length,0);assert.equal(h.requests.length,2);assert.equal(h.checks().length,100);assert.equal(h.checks().filter(input=>input.checked).length,25);
   h.checks().slice(9).forEach(input=>input.checked=false);h.run('updateSpotifyMixSelection()');assert.equal(h.node('#spotifyMixStart').disabled,true);await h.run('startSpotifyMix()');assert.equal(h.plays.length,0);
   h.checks()[9].checked=true;h.run('updateSpotifyMixSelection()');assert.equal(h.node('#spotifyMixStart').disabled,false);await h.run('startSpotifyMix()');assert.equal(h.plays.length,1);assert.equal(h.plays[0][2].length,10);assert.equal(h.node('#spotifyMixDialog').open,false);
+});
+test('started Mix keeps a read-only tracklist after the preview closes and clears on account change',async()=>{
+  const h=harness(provider());await h.run('openSpotifyMix()');await h.run('startSpotifyMix()');
+  assert.equal(h.node('#spotifyMixDialog').open,false);
+  assert.match(h.node('#activeSpotifyMixSelectedTracks').innerHTML,/Song 1/);assert.match(h.node('#activeSpotifyMixSelectedTracks').innerHTML,/aria-current="true"/);
+  assert.equal(h.run('activeSpotifyMix.tracks.length'),25);
+  h.run('openActiveSpotifyMix()');assert.equal(h.node('#activeSpotifyMixDialog').open,true);
+  h.run('spotifyTrackUri=activeSpotifyMix.tracks[1].uri;renderActiveSpotifyMix()');assert.match(h.node('#activeSpotifyMixSelectedTracks').innerHTML,/Current/);
+  h.run('++spotifyAccountGeneration;clearActiveSpotifyMix()');assert.equal(h.node('#activeSpotifyMixDialog').open,false);assert.equal(h.run('activeSpotifyMix'),null);
+});
+test('a delayed queue response cannot repaint a different Spotify account',async()=>{
+  let finish;const h=harness(url=>url==='/api/spotify/queue'?new Promise(resolve=>finish=resolve):provider()(url));
+  const pending=h.run('openActiveSpotifyMix()');assert.equal(h.node('#activeSpotifyMixDialog').open,true);
+  h.run('++spotifyAccountGeneration;clearActiveSpotifyMix()');
+  finish({ok:true,json:async()=>({current:{uri:seed.uri,title:'Old account song'},upcoming:[]})});await pending;
+  assert.equal(h.node('#activeSpotifyMixDialog').open,false);assert.equal(h.node('#activeSpotifyMixTracks').innerHTML,'');
+});
+test('Mix length and swap refine the preview without changing the starting song',async()=>{
+  const h=harness(provider());await h.run('openSpotifyMix()');
+  assert.equal(h.checks().filter(input=>input.checked).length,25);
+  const before=h.run('selectedSpotifyMixTracks().map(track=>track.uri)');
+  h.run('swapSpotifyMixTrack(1)');const after=h.run('selectedSpotifyMixTracks().map(track=>track.uri)');
+  assert.equal(after.length,25);assert.equal(after[0],seed.uri);assert.notEqual(after[1],before[1]);assert.ok(!after.includes(before[1]));
+  h.node('#spotifyMixLength').value='50';h.run('setSpotifyMixLength()');assert.equal(h.checks().filter(input=>input.checked).length,50);
+  h.node('#spotifyMixLength').value='100';h.run('setSpotifyMixLength()');assert.equal(h.checks().filter(input=>input.checked).length,100);
+  h.run('swapSpotifyMixTrack(1)');assert.equal(h.checks().filter(input=>input.checked).length,100);
+  h.run('++spotifyAccountGeneration;swapSpotifyMixTrack(1)');assert.equal(h.checks().filter(input=>input.checked).length,100);
+});
+test('changing Mix direction rebuilds locally and clears earlier swaps',async()=>{
+  const h=harness(provider(mixedSources()));await h.run('openSpotifyMix()');assert.equal(h.requests.length,2);
+  h.run('swapSpotifyMixTrack(1)');
+  h.node('#spotifyMixDirection').value='discover';h.run('setSpotifyMixDirection()');
+  assert.equal(h.requests.length,2);assert.equal(h.checks().filter(input=>input.checked).length,25);
+  assert.equal(h.run('selectedSpotifyMixTracks()[0].uri'),seed.uri);
+  assert.ok(h.run('selectedSpotifyMixTracks().slice(1).every(track=>!track.familiar)'));
+  h.node('#spotifyMixDirection').value='familiar';h.run('setSpotifyMixDirection()');
+  assert.ok(h.run('selectedSpotifyMixTracks().every(track=>track.familiar)'));
+  h.run('++spotifyAccountGeneration');h.node('#spotifyMixDirection').value='balanced';h.run('setSpotifyMixDirection()');assert.equal(h.run('selectedSpotifyMixTracks()[1].familiar'),true);
 });
 test('a qualifying short mix is playable without unrelated filler',async()=>{
   const data=sources();data.playlists[0].tracks=data.playlists[0].tracks.slice(0,12);const h=harness(provider(data));await h.run('openSpotifyMix()');assert.equal(h.node('#spotifyMixStart').disabled,false);assert.ok(h.checks().length>=10&&h.checks().length<100);assert.equal(h.plays.length,0);
@@ -80,7 +130,7 @@ test('a qualifying short mix is playable without unrelated filler',async()=>{
 test('selected Mix saves a private playlist and gives a Spotify link',async()=>{
   const h=harness(async(url,options)=>url==='/api/spotify/mix-playlist'?{ok:true,json:async()=>({url:'https://open.spotify.com/playlist/private123'})}:provider()(url,options));
   await h.run('openSpotifyMix()');assert.equal(h.node('#spotifyMixSave').disabled,false);
-  await h.run('saveSpotifyMix()');const request=h.requests.find(item=>item.url==='/api/spotify/mix-playlist');assert.ok(request);assert.equal(JSON.parse(request.options.body).uris.length,100);
+  await h.run('saveSpotifyMix()');const request=h.requests.find(item=>item.url==='/api/spotify/mix-playlist');assert.ok(request);assert.equal(JSON.parse(request.options.body).uris.length,25);
   assert.equal(h.node('#spotifyMixSaveStatus').children.at(-1).href,'https://open.spotify.com/playlist/private123');assert.equal(h.plays.length,0);
 });
 test('account reset aborts pending lookup and rejects late responses',async()=>{

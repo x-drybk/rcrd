@@ -64,8 +64,10 @@ function harness(fetch = async () => ({ ok: true, json: async () => ({}) }), ext
     collectionPage=1,wantlistPage=1,collectionPageSize=24,wantlistPageSize=24,discogsSearchResults=[],discogsSearchPagination={};
     const discogsRefreshSequence={collection:0,wantlist:0},discogsLoadedAt={collection:0,wantlist:0},discogsLastFailureAt={collection:0,wantlist:0},discogsRefreshRequest={collection:null,wantlist:null},DISCOGS_LIST_FRESH_MS=60000;
     const pressingCompareSelected=new Map();let pressingCompareRevision=0;`, context);
-  vm.runInContext('let spotifyMixRevision=0,spotifyMixController=null,spotifyMixPreview=null;',context);
+  vm.runInContext('let spotifyMixRevision=0,spotifyMixController=null,spotifyMixPreview=null,activeSpotifyMix=null,playingQueueRevision=0;',context);
   vm.runInContext(definition('resetSpotifyMix'),context);
+  vm.runInContext(definition('renderActiveSpotifyMix'),context);
+  vm.runInContext(definition('clearActiveSpotifyMix'),context);
   vm.runInContext(source.split('\n').find(line => line.startsWith('const HOME_RECOMMENDATION_LIMIT=')), context);
   vm.runInContext(source.split('\n').find(line => line.startsWith('const HOME_RECOMMENDATION_PAGE_SIZE=')), context);
   vm.runInContext(source.split('\n').find(line => line.startsWith('let homeRecommendationPage=')), context);
@@ -80,6 +82,16 @@ function harness(fetch = async () => ({ ok: true, json: async () => ({}) }), ext
     context
   };
 }
+
+test('active Mix list follows playback and clears when another song takes over', async () => {
+  const h=harness();
+  h.run("activeSpotifyMix={generation:spotifyAccountGeneration,tracks:[{uri:'spotify:track:first',title:'First',artist:'A',album:'One'},{uri:'spotify:track:second',title:'Second',artist:'B',album:'Two'}],startedAt:Date.now(),confirmed:true};spotifyTrackUri='spotify:track:first';renderActiveSpotifyMix()");
+  assert.match(h.node('#activeSpotifyMixSelectedTracks').innerHTML,/First.*Current/);
+  await h.run("setCurrentSpotifyTrackUri('spotify:track:second')");
+  assert.match(h.node('#activeSpotifyMixSelectedTracks').innerHTML,/Second.*Current/);
+  await h.run("setCurrentSpotifyTrackUri('spotify:track:outside')");
+  assert.equal(h.run('activeSpotifyMix'),null);
+});
 
 test('browsing context restores only after the connected account marker matches', () => {
   const h = harness(); let navigations = 0; let searches = 0;

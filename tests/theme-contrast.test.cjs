@@ -114,7 +114,7 @@ test('player health and quick actions share a row and hide retry until needed', 
 test('track-bar quick actions share one interaction style and consistent labels', () => {
   const actions = page.split('<div class="player-quick-actions">')[1]?.split('<button type="button" class="ambient-visualizer"')[0] || '';
   for (const id of ['playerLiked', 'playerLyrics', 'playerMix', 'playerVisualizer', 'playerDiscogs', 'volumeButton']) assert.match(actions, new RegExp(`id="${id}"`));
-  assert.match(actions, /id="playerDiscogs"[^>]*>Discogs<\/button>/);
+  assert.match(actions, /id="playerDiscogs"[^>]*aria-label="Find this song on Discogs"[^>]*><svg/);
   assert.doesNotMatch(actions, /Discogs ↗/);
   for (const selector of ['.player-actions .player-quick-actions>button', '.player-actions .volume-wrap>button', '.player-actions button.playback-health-toggle']) {
     assert.equal(property(selector, 'height'), '30px');
